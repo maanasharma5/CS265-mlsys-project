@@ -112,7 +112,6 @@ def _to_caller_flattened_graph_module(gm: fx.GraphModule) -> fx.GraphModule:
     return gm
 
 
-
 @contextmanager
 def gradients_tagging(params: Dict[str, nn.Parameter]):
     """
@@ -268,10 +267,7 @@ def _compile(func: Callable, *args: Any, **kwargs: Any):
 COMPILED_OBJECT_KEY = "_compiled_obj"
 
 
-
-
-
-def compile(func: Callable, gm_transformation:Callable):
+def compile(func: Callable, gm_transformation: Callable):
     @wraps(func)
     def wrapper(*args, **kwargs):
         compiled_obj = wrapper.__dict__.get(COMPILED_OBJECT_KEY, None)
@@ -282,10 +278,8 @@ def compile(func: Callable, gm_transformation:Callable):
         if gm_transformation:
             compiled_obj.gm = gm_transformation(compiled_obj.gm, flat_inps)
         with torch.no_grad():
-
             output = compiled_obj.gm(*flat_inps)[0]
 
         return output
 
     return wrapper
-
