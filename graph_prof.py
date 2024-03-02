@@ -57,6 +57,8 @@ class GraphProfiler(fx.Interpreter):
 
         for node in self.module.graph.nodes:
             print ("Node name: ", node.name)
+            print ("Node type: ", node.op)
+            print ("Node target: ", node.target)
             print ("Input to this node", node.all_input_nodes)
             print ("Users of this node: ", node.users)
 
