@@ -25,8 +25,9 @@ class GraphProfiler(fx.Interpreter):
         # You should perform the static analysis of the graph here. In
         # particular you might want to find the intermediate
         # nodes/activations/feature_maps in the graph that will be defined as
-        # those nodes which are not parameters but are created during the
-        # forward pass and are also used in the backward pass for computation.
+        # those nodes which are not parameters (not placeholder node types) but
+        # are created during the forward pass and are also used in the backward
+        # pass for computation. 
 
         # The boundary between the forward pass and backward pass can be
         # identified by locating the node
@@ -40,6 +41,24 @@ class GraphProfiler(fx.Interpreter):
 
         # For these intermediate nodes in the graph, you will record their last
         # use in the forward pass and their first use in the backward pass.
+
+        # The parameters of the models are the placeholder (input) nodes of the
+        # graph. Note that not all the placeholder nodes of the graph are
+        # parameters. The number of parameters of the graphs and the gradients
+        # should be equal.
+
+        # You will also see several operators of the type 
+        #' %tag_grad :[num_users=1] =
+        # call_function[target=torch.ops.dummy.tag_grad.default]'. These are
+        # also dummy operations added after every gradient produced in the
+        # backward pass. 
+
+        # Printing the input nodes, node users and node names.
+
+        for node in self.module.graph.nodes:
+            print ("Node name: ", node.name)
+            print ("Input to this node", node.all_input_nodes)
+            print ("Users of this node: ", node.users)
 
     def run(
         self,
@@ -56,6 +75,7 @@ class GraphProfiler(fx.Interpreter):
         # If you are in the backward pass region and one of the feature maps 'x'
         # was swapped out, and if node 'n' will use this feature map 'x' as one
         # of its inputs then you swap 'x' back to the GPU memory here.
+
 
         # you can start measuring the run-time of a node here
         result = super().run_node(n)
