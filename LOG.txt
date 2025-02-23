@@ -1,0 +1,8 @@
+TODOs:
+- 
+
+
+NOTES:
+- comment out in starter_code.graph_transformation to see only graph because the processing code has very long outputs that exceed the terminal memory
+- don't edit graph_tracer.py -- just use
+- main work in graph_prof.py and then obviously doing the activation checkpointing
