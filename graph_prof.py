@@ -1,9 +1,23 @@
+"""
+In the initial phase, our primary task is to construct a comprehensive computational graph. This
+graph will encapsulate all operations from the forward, backward, and optimizer steps within a
+single iteration. The nodes within this graph symbolize individual operations, while the edges
+represent the dependencies between input and output data. The profiler's job is :
+    1. Collecting data on the computation time and memory usage of each operator when the
+    graph operations are executed in topological order.
+        # TODO ask if these have to be disaggregated by type?
+    2. Categorizing the inputs and outputs of each operation as a parameter, gradient,
+    activation, optimizer state, or other types.
+    3. Conducting static data analysis on activations by documenting the first and last use of
+    each activation during the forward and backward passes.
+    4. Generating a peak memory breakdown graph using the collected statistics.
+"""
+
 from enum import Enum
-from typing import Dict
+from dataclasses import dataclass
+from typing import Dict, List, Set, Tuple, Any, final
 import torch
 import torch.fx as fx
-from typing import Dict, Any
-
 
 class OP(str, Enum):
     CALL_FUNCTION = "call_function"
@@ -25,6 +39,10 @@ class NodeType(Enum):
     OTHER = 3
 
 
+@dataclass
+class ProfilerStatistics:
+    time_per_run: int
+
 # This is an example graph_profiler that extends the fx.Interpreter class, it
 # will perform graph execution by running the graph node by node.
 
@@ -32,6 +50,11 @@ class NodeType(Enum):
 class GraphProfiler(fx.Interpreter):
     def __init__(self, module: fx.GraphModule, garbage_collect_values: bool = True):
         super().__init__(module, garbage_collect_values)
+        
+        # Fields for statistics
+        self.num_runs: int = 0
+        self.total_time_elapsed = 0     # in ms
+        self.all_aggregated_stats: ProfilerStatistics = None
 
         # You should perform the static analysis of the graph here. In
         # particular you might want to find the intermediate
@@ -79,6 +102,8 @@ class GraphProfiler(fx.Interpreter):
         initial_env: Dict[fx.Node, Any] | None = None,
         enable_io_processing: bool = True
     ) -> Any:
+        
+        self.num_runs += 1
         return super().run(
             *args, initial_env=initial_env, enable_io_processing=enable_io_processing
         )
@@ -88,10 +113,16 @@ class GraphProfiler(fx.Interpreter):
         # was swapped out, and if node 'n' will use this feature map 'x' as one
         # of its inputs then you swap 'x' back to the GPU memory here.
 
-        # you can start measuring the run-time of a node here
+        # TODO ask why start/end here and not including swap-node
+        # Measuring time
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
         result = super().run_node(n)
-        # you can end measuring the run-time of a node here HINT: Use
-        # torch.cuda.Events for doing time measurements of operations.
+        end.record()
+        torch.cuda.current_stream().synchronize()
+        self.total_time_elapsed += start.elapsed_time(end)
+        # TODO ask about memory? Do we want to do it per step or not
 
         # If you are in the forward pass region and if the current node 'n' is
         # the last user of a feature map 'x', then it should be swapped out to
@@ -100,15 +131,23 @@ class GraphProfiler(fx.Interpreter):
         return result
 
     def aggregate_stats(self) -> None:
-        # You are expected run the profiler for x warm-up iterations and y
-        # actual measurement iterations. The run-time measurement then needs to
-        # be averaged over the y runs.
-        pass
+        
+        self.all_aggregated_stats = ProfilerStatistics(
+            time_per_run=(self.total_time_elapsed / self.num_runs)
+        )
+
+        # might need more elaborate agregation for nodes once we've actually profiled them
 
     def print_stats(self) -> None:
-        pass
+        # can make some appropriate data structure and flush
+        if self.all_aggregated_stats is None:
+            print("No statistics available yet. Try aggregating.")
+        else:
+            print(self.all_aggregated_stats)
 
     def reset_stats(self) -> None:
         # The statistics must be cleared out after x warm-up iterations and
         # reset before the actual measurement begins.
-        pass
+        self.num_runs = 0
+        self.total_time_elapsed = 0
+        self.all_aggregated_stats = None
