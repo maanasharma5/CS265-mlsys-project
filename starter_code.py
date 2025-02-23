@@ -60,17 +60,17 @@ def train_step(
 
 
 def graph_transformation(gm: fx.GraphModule, args: Any) -> fx.GraphModule:
-    print(gm.graph)
-    # graph_profiler = GraphProfiler(gm)
-    # warm_up_iters, profile_iters = 2, 3
-    # with torch.no_grad():
-    #     for _ in range(warm_up_iters):
-    #         graph_profiler.run(*args)
-    #     graph_profiler.reset_stats()
-    #     for _ in range(profile_iters):
-    #         graph_profiler.run(*args)
-    # graph_profiler.aggregate_stats()
-    # graph_profiler.print_stats()
+    # print(gm.graph)
+    graph_profiler = GraphProfiler(gm)
+    warm_up_iters, profile_iters = 2, 3
+    with torch.no_grad():
+        for _ in range(warm_up_iters):
+            graph_profiler.run(*args)
+        graph_profiler.reset_stats()
+        for _ in range(profile_iters):
+            graph_profiler.run(*args)
+    graph_profiler.aggregate_stats()
+    graph_profiler.print_stats()
     return gm
 
 
