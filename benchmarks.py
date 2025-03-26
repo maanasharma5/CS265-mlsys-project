@@ -29,11 +29,12 @@ model_batch_sizes: Dict[str, int] = {
 
 
 class Experiment:
-    def __init__(self, model_name: str, batch_size: int, extra_args=[]):
+    def __init__(self, model_name: str, batch_size: int, verbose=False, extra_args=[]):
         assert model_name in model_names, f"Model {model_name} not found in model names {model_names}"
         dev = torch.device("cuda")
         self.model_name = model_name
         self.batch_size = batch_size
+        self.verbose = verbose
 
         if self.model_name == "Transformer":
 
@@ -97,8 +98,9 @@ class Experiment:
         self.optimizer.zero_grad()
 
     def graph_transformation(self, gm: fx.GraphModule, args: Any) -> fx.GraphModule:
-        print(gm.graph.print_tabular())
-        warm_up_iters, profile_iters = 2, 3
+        if self.verbose:
+            print(gm.graph.print_tabular())
+        warm_up_iters, profile_iters = 2, 1 # 2, 3
         graph_profiler = GraphProfiler(gm)
 
         with torch.no_grad():
@@ -110,6 +112,7 @@ class Experiment:
                 graph_profiler.run(*args)
             graph_profiler.aggregate_stats()
             graph_profiler.print_stats()
+            graph_profiler.dump_stats(f"results/{self.model_name}_batch{self.batch_size}_graph_profiler_stats.json")
 
         return gm
 

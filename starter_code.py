@@ -71,6 +71,7 @@ def graph_transformation(gm: fx.GraphModule, args: Any) -> fx.GraphModule:
             graph_profiler.run(*args)
     graph_profiler.aggregate_stats()
     graph_profiler.print_stats()
+    graph_profiler.dump_stats("results/starter_code_graph_profiler_stats.json")
     return gm
 
 
