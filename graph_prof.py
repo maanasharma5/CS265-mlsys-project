@@ -5,7 +5,6 @@ single iteration. The nodes within this graph symbolize individual operations, w
 represent the dependencies between input and output data. The profiler's job is :
     1. Collecting data on the computation time and memory usage of each operator when the
     graph operations are executed in topological order.
-        # TODO ask if these have to be disaggregated by type?
     2. Categorizing the inputs and outputs of each operation as a parameter, gradient,
     activation, optimizer state, or other types.
     3. Conducting static data analysis on activations by documenting the first and last use of
@@ -14,10 +13,11 @@ represent the dependencies between input and output data. The profiler's job is 
 """
 
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Set, Tuple, Any, final
 import torch
 import torch.fx as fx
+import json
 
 class OP(str, Enum):
     CALL_FUNCTION = "call_function"
@@ -47,7 +47,7 @@ class ProfilerStatistics:
 class MemoryStatistics:
     cpu_memory_usages: List[int] = field(default_factory=list)
     gpu_memory_usages: List[int] = field(default_factory=list)
-    peak_memory_usages: List[int] = field(default_factory=list)
+    peak_memory_usage: int = 0
     param_memory_usages: List[int] = field(default_factory=list)
     activation_memory_usages: List[int] = field(default_factory=list)
     grad_memory_usages: List[int] = field(default_factory=list)
@@ -288,14 +288,13 @@ class GraphProfiler(fx.Interpreter):
                 elif node_category == NodeType.OTHER:
                     other_memory_usage += mem_usage
         # Update memory stats
-        peak_memory_usage = max(gpu_memory_usage + cpu_memory_usage, self.memory_stats.peak_memory_usages[-1]) if len(self.memory_stats.peak_memory_usages) > 0 else gpu_memory_usage + cpu_memory_usage
+        self.memory_stats.peak_memory_usage = max(gpu_memory_usage + cpu_memory_usage, self.memory_stats.peak_memory_usage)
         self.memory_stats.cpu_memory_usages.append(cpu_memory_usage)
         self.memory_stats.gpu_memory_usages.append(gpu_memory_usage)
         self.memory_stats.param_memory_usages.append(param_memory_usage)
         self.memory_stats.activation_memory_usages.append(activation_memory_usage)
         self.memory_stats.grad_memory_usages.append(grad_memory_usage)
         self.memory_stats.other_memory_usages.append(other_memory_usage)
-        self.memory_stats.peak_memory_usages.append(peak_memory_usage)
 
 
     def aggregate_stats(self) -> None:
@@ -319,4 +318,12 @@ class GraphProfiler(fx.Interpreter):
         self.all_aggregated_stats = None
         self.memory_stats = MemoryStatistics()
         self.in_forward_pass = True
+
+    def dump_stats(self, path: str = None) -> None:
+        if path is None:
+            path = 'results/default_graph_profiler_stats.json'
+        with open(path, 'w') as f:
+            dict_to_dump = asdict(self.memory_stats)
+            dict_to_dump['rank_of_backward'] = self.rank_of_backward
+            json.dump(dict_to_dump, f)
         
