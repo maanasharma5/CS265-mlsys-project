@@ -14,7 +14,7 @@ represent the dependencies between input and output data. The profiler's job is 
 """
 
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Set, Tuple, Any, final
 import torch
 import torch.fx as fx
@@ -43,6 +43,17 @@ class NodeType(Enum):
 class ProfilerStatistics:
     time_per_run: int
 
+@dataclass 
+class MemoryStatistics:
+    cpu_memory_usages: List[int] = field(default_factory=list)
+    gpu_memory_usages: List[int] = field(default_factory=list)
+    peak_memory_usages: List[int] = field(default_factory=list)
+    param_memory_usages: List[int] = field(default_factory=list)
+    activation_memory_usages: List[int] = field(default_factory=list)
+    grad_memory_usages: List[int] = field(default_factory=list)
+    other_memory_usages: List[int] = field(default_factory=list)
+
+
 @dataclass
 class NodeAttributes:
     node_type: NodeType = None
@@ -58,9 +69,6 @@ class NodeAttributes:
     first_bw_access: fx.Node = None
     last_bw_access: fx.Node = None
 
-# Helper functions
-def _calculate_memory_usage(tensor: torch.Tensor) -> int:
-    return tensor.element_size() * tensor.nelement()
 
 class GraphProfiler(fx.Interpreter):
     def __init__(self, module: fx.GraphModule, garbage_collect_values: bool = True):
@@ -69,13 +77,7 @@ class GraphProfiler(fx.Interpreter):
         # Fields for statistics
         self.num_runs: int = 0
         self.total_time_elapsed = 0     # in ms
-
-        self.gpu_memory_usages: List[int] = [] # per run_node
-        self.peak_memory_usages: List[int] = []
-        self.param_memory_usages: List[int] = []
-        self.activation_memory_usages: List[int] = []
-        self.grad_memory_usages: List[int] = []
-        self.other_memory_usages: List[int] = []
+        self.memory_stats = MemoryStatistics()
 
         self.in_forward_pass = True
         self.rank_of_backward = None
@@ -224,7 +226,6 @@ class GraphProfiler(fx.Interpreter):
         # was swapped out, and if node 'n' will use this feature map 'x' as one
         # of its inputs then you swap 'x' back to the GPU memory here.
 
-        # TODO ask why start/end here and not including swap-node
         # Measuring time
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
@@ -233,21 +234,75 @@ class GraphProfiler(fx.Interpreter):
         end.record()
         torch.cuda.current_stream().synchronize()
         self.total_time_elapsed += start.elapsed_time(end)
-        # TODO ask about memory? Do we want to do it per step or not
+
+        # Measure and update memory
+        self._update_memory_stats()
+        
 
         # If you are in the forward pass region and if the current node 'n' is
         # the last user of a feature map 'x', then it should be swapped out to
         # the CPU memory here.
 
+
         return result
+
+    def _is_on_gpu(self, node: fx.Node | torch.Tensor) -> bool:
+        if isinstance(node, fx.Node):
+            node = self.env[node]
+        return node.device.type != 'cpu'
+
+
+    def _update_memory_stats(self) -> None:
+        # Choose to not do on a specific node because not scalable to other operations but this is not efficient
+
+        # Cumulative memory stats to update
+        cpu_memory_usage = 0
+        gpu_memory_usage = 0
+        param_memory_usage = 0
+        activation_memory_usage = 0
+        grad_memory_usage = 0
+        other_memory_usage = 0
+        # Populate by iterating over each node
+        # A quicker approach might call this function for each node, using knowledge about the graph to figure out memory changes
+        for node in self.env:
+            node_tensor = self.env[node]
+            node_category = self.all_nodes_info[node].node_type
+
+            if torch.is_tensor(node_tensor):
+                mem_usage = node_tensor.element_size() * node_tensor.nelement()
+                # update node_info
+                self.all_nodes_info[node].active_mem = mem_usage
+                if mem_usage > self.all_nodes_info[node].peak_mem:
+                    self.all_nodes_info[node].peak_mem = mem_usage
+                # update memory stats
+                if self._is_on_gpu(node_tensor):
+                    gpu_memory_usage += mem_usage
+                else:
+                    cpu_memory_usage += mem_usage
+                if node_category == NodeType.PARAM:
+                    param_memory_usage += mem_usage
+                elif node_category == NodeType.ACT:
+                    activation_memory_usage += mem_usage
+                elif node_category == NodeType.GRAD:
+                    grad_memory_usage += mem_usage
+                elif node_category == NodeType.OTHER:
+                    other_memory_usage += mem_usage
+        # Update memory stats
+        peak_memory_usage = max(gpu_memory_usage + cpu_memory_usage, self.memory_stats.peak_memory_usages[-1]) if len(self.memory_stats.peak_memory_usages) > 0 else gpu_memory_usage + cpu_memory_usage
+        self.memory_stats.cpu_memory_usages.append(cpu_memory_usage)
+        self.memory_stats.gpu_memory_usages.append(gpu_memory_usage)
+        self.memory_stats.param_memory_usages.append(param_memory_usage)
+        self.memory_stats.activation_memory_usages.append(activation_memory_usage)
+        self.memory_stats.grad_memory_usages.append(grad_memory_usage)
+        self.memory_stats.other_memory_usages.append(other_memory_usage)
+        self.memory_stats.peak_memory_usages.append(peak_memory_usage)
+
 
     def aggregate_stats(self) -> None:
         
         self.all_aggregated_stats = ProfilerStatistics(
             time_per_run=(self.total_time_elapsed / self.num_runs)
         )
-
-        # might need more elaborate agregation for nodes once we've actually profiled them
 
     def print_stats(self) -> None:
         # can make some appropriate data structure and flush
@@ -262,5 +317,6 @@ class GraphProfiler(fx.Interpreter):
         self.num_runs = 0
         self.total_time_elapsed = 0
         self.all_aggregated_stats = None
-        # TODO reset appropriate other stats
+        self.memory_stats = MemoryStatistics()
+        self.in_forward_pass = True
         
