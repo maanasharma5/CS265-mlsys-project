@@ -43,9 +43,24 @@ class NodeType(Enum):
 class ProfilerStatistics:
     time_per_run: int
 
-# This is an example graph_profiler that extends the fx.Interpreter class, it
-# will perform graph execution by running the graph node by node.
+@dataclass
+class NodeAttributes:
+    node_type: NodeType = None
+    rank: int = None
+    gtype_is_forward: bool = None
+    run_time: float = 1.
+    swap_time: float = 0.
+    peak_mem: int = 0
+    active_mem: int = 0
+    inactive_time: float = 0
+    swap_time: float = 0
+    last_fw_access: fx.Node = None
+    first_bw_access: fx.Node = None
+    last_bw_access: fx.Node = None
 
+# Helper functions
+def _calculate_memory_usage(tensor: torch.Tensor) -> int:
+    return tensor.element_size() * tensor.nelement()
 
 class GraphProfiler(fx.Interpreter):
     def __init__(self, module: fx.GraphModule, garbage_collect_values: bool = True):
@@ -54,7 +69,21 @@ class GraphProfiler(fx.Interpreter):
         # Fields for statistics
         self.num_runs: int = 0
         self.total_time_elapsed = 0     # in ms
+
+        self.gpu_memory_usages: List[int] = [] # per run_node
+        self.peak_memory_usages: List[int] = []
+        self.param_memory_usages: List[int] = []
+        self.activation_memory_usages: List[int] = []
+        self.grad_memory_usages: List[int] = []
+        self.other_memory_usages: List[int] = []
+
+        self.in_forward_pass = True
+        self.rank_of_backward = None
         self.all_aggregated_stats: ProfilerStatistics = None
+        self.all_nodes_info: Dict[fx.Node, NodeAttributes] = {}
+
+        rank = 0
+        building_graph = True
 
         # You should perform the static analysis of the graph here. In
         # particular you might want to find the intermediate
@@ -87,14 +116,93 @@ class GraphProfiler(fx.Interpreter):
         # The argument at position 0 is the list of parameter nodes, while the
         # argument at position 1 is the list of gradient nodes.
 
-        # Printing the input nodes, node users and node names.
-
         for node in self.module.graph.nodes:
-            print("Node name: ", node.name)
-            print("Node type: ", node.op)
-            print("Node target: ", node.target)
-            print("Input to this node", node.all_input_nodes)
-            print("Users of this node: ", node.users)
+            rank += 1
+
+            if self._is_backward_start(node):
+                # beginning of backward pass
+                building_graph = False
+                self.rank_of_backward = rank
+
+            # know categories better if we see optimizer node
+            if '_fused_adam' in node.name and node.target == torch.ops.aten._fused_adam.default:
+                for input_node in node.all_input_nodes:
+                    if input_node in self.all_nodes_info:
+                        self.all_nodes_info[input_node].node_type = NodeType.PARAM
+                    else: 
+                        self.all_nodes_info[input_node] = NodeAttributes(
+                            node_type=NodeType.PARAM,
+                            rank=None,
+                            gtype_is_forward=True,
+                            last_fw_access = None,
+                            first_bw_access = None,
+                            last_bw_access = None
+                        )
+                for output_node in node.users:
+                    if output_node in self.all_nodes_info:
+                        self.all_nodes_info[output_node].node_type = NodeType.GRAD
+                    else:
+                        self.all_nodes_info[output_node] = NodeAttributes(
+                            node_type=NodeType.GRAD,
+                            rank=None,
+                            gtype_is_forward=False,
+                            last_fw_access = None,
+                            first_bw_access = None,
+                            last_bw_access = None
+                        )
+
+            # main initial profiling logic
+            if building_graph:
+                # add self; might already be in there from 'using' optimizer
+                if node not in self.all_nodes_info:
+                    self.all_nodes_info[node] = NodeAttributes(
+                        node_type=self._initial_categorize_node(node), 
+                        rank=rank, 
+                        gtype_is_forward=True,
+                        last_fw_access = None,
+                        first_bw_access = None,
+                        last_bw_access = None
+                    )
+                else:
+                    self.all_nodes_info[node].rank = rank
+                # update other nodes info
+                for input_node in node.all_input_nodes:
+                    self.all_nodes_info[input_node].last_fw_access = node
+                    # shouldn't throw error by topological sort
+            else:
+                # add self
+                if node not in self.all_nodes_info:
+                    self.all_nodes_info[node] = NodeAttributes(
+                        node_type=self._initial_categorize_node(node), 
+                        rank=rank, 
+                        gtype_is_forward=False,
+                        last_fw_access = None,
+                        first_bw_access = None,
+                        last_bw_access = None
+                    )
+                
+                # update other nodes' info
+                for input_node in node.all_input_nodes:
+                    if self.all_nodes_info[input_node].first_bw_access is None:
+                        self.all_nodes_info[input_node].first_bw_access = node
+                    self.all_nodes_info[input_node].last_bw_access = node
+
+    def _initial_categorize_node(self, node: fx.Node) -> NodeType:
+        if node.op == 'placeholder':
+            # most likely be a parameter, but can be optimixer state or input mini-batch as well
+            return NodeType.PARAM
+
+        node_name = node.name.lower()
+        if 'relu' in node_name or 'conv' in node_name or 'pool' in node_name or 'linear' in node_name or 'fc' in node_name or 'gelu' in node_name:
+            return NodeType.ACT
+        elif 'tag_grad' in node_name:
+            return NodeType.GRAD
+        else:
+            return NodeType.OTHER
+
+    def _is_backward_start(self, node: fx.Node) -> bool:
+        node_name = node.name.lower()
+        return 'sep_backward' in node_name
 
     def run(
         self,
@@ -109,6 +217,9 @@ class GraphProfiler(fx.Interpreter):
         )
 
     def run_node(self, n: fx.Node) -> Any:
+        if self._is_backward_start(n):
+            self.in_forward_pass = False
+
         # If you are in the backward pass region and one of the feature maps 'x'
         # was swapped out, and if node 'n' will use this feature map 'x' as one
         # of its inputs then you swap 'x' back to the GPU memory here.
@@ -151,3 +262,5 @@ class GraphProfiler(fx.Interpreter):
         self.num_runs = 0
         self.total_time_elapsed = 0
         self.all_aggregated_stats = None
+        # TODO reset appropriate other stats
+        
