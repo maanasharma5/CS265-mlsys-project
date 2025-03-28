@@ -119,7 +119,7 @@ class GraphProfiler(fx.Interpreter):
         # argument at position 1 is the list of gradient nodes.
 
         for node in self.module.graph.nodes:
-            rank += 1
+            rank += 1 # idk what rank we want here / where it's relevant
 
             if self._is_backward_start(node):
                 # beginning of backward pass
@@ -128,6 +128,8 @@ class GraphProfiler(fx.Interpreter):
 
             # know categories better if we see optimizer node
             if '_fused_adam' in node.name and node.target == torch.ops.aten._fused_adam.default:
+                print("Found optimizer node during initialization", flush=True)
+                # TODO ask? is this even accurate with "argument 0 and 1 to the function?"
                 for input_node in node.all_input_nodes:
                     if input_node in self.all_nodes_info:
                         self.all_nodes_info[input_node].node_type = NodeType.PARAM
@@ -195,12 +197,13 @@ class GraphProfiler(fx.Interpreter):
             return NodeType.PARAM
 
         node_name = node.name.lower()
-        if 'relu' in node_name or 'conv' in node_name or 'pool' in node_name or 'linear' in node_name or 'fc' in node_name or 'gelu' in node_name:
+        if 'relu' in node_name or 'conv' in node_name or 'pool' in node_name or 'gelu' in node_name or 'sigm' in node_name or 'tanh' in node_name or 'softmax' in node_name:
             return NodeType.ACT
         elif 'tag_grad' in node_name:
             return NodeType.GRAD
         else:
             return NodeType.OTHER
+            # are these all matrix multiplies e.g.?
 
     def _is_backward_start(self, node: fx.Node) -> bool:
         node_name = node.name.lower()
@@ -298,7 +301,6 @@ class GraphProfiler(fx.Interpreter):
 
 
     def aggregate_stats(self) -> None:
-        
         self.all_aggregated_stats = ProfilerStatistics(
             time_per_run=(self.total_time_elapsed / self.num_runs)
         )
