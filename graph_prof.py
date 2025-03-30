@@ -59,20 +59,20 @@ class NodeAttributes:
     node_type: NodeType = None
     rank: int = None
     gtype_is_forward: bool = None
-    run_time: float = 1.
+    run_time: float = 0.
     swap_time: float = 0.
     peak_mem: int = 0
     active_mem: int = 0
     inactive_time: float = 0
-    swap_time: float = 0
     last_fw_access: fx.Node = None
     first_bw_access: fx.Node = None
     last_bw_access: fx.Node = None
 
 
 class GraphProfiler(fx.Interpreter):
-    def __init__(self, module: fx.GraphModule, garbage_collect_values: bool = True):
+    def __init__(self, module: fx.GraphModule, garbage_collect_values: bool = True, verbose=False):
         super().__init__(module, garbage_collect_values)
+        self.verbose = verbose
         
         # Fields for statistics
         self.num_runs: int = 0
@@ -85,7 +85,7 @@ class GraphProfiler(fx.Interpreter):
         self.all_nodes_info: Dict[fx.Node, NodeAttributes] = {}
 
         rank = 0
-        building_graph = True
+        in_forward = True
 
         # You should perform the static analysis of the graph here. In
         # particular you might want to find the intermediate
@@ -118,49 +118,20 @@ class GraphProfiler(fx.Interpreter):
         # The argument at position 0 is the list of parameter nodes, while the
         # argument at position 1 is the list of gradient nodes.
 
+        # First pass: for forward/backward uses, for later use in classification
         for node in self.module.graph.nodes:
             rank += 1 # idk what rank we want here / where it's relevant
 
             if self._is_backward_start(node):
                 # beginning of backward pass
-                building_graph = False
+                in_forward = False
                 self.rank_of_backward = rank
 
-            # know categories better if we see optimizer node
-            if '_fused_adam' in node.name and node.target == torch.ops.aten._fused_adam.default:
-                print("Found optimizer node during initialization", flush=True)
-                # TODO ask? is this even accurate with "argument 0 and 1 to the function?"
-                for input_node in node.all_input_nodes:
-                    if input_node in self.all_nodes_info:
-                        self.all_nodes_info[input_node].node_type = NodeType.PARAM
-                    else: 
-                        self.all_nodes_info[input_node] = NodeAttributes(
-                            node_type=NodeType.PARAM,
-                            rank=None,
-                            gtype_is_forward=True,
-                            last_fw_access = None,
-                            first_bw_access = None,
-                            last_bw_access = None
-                        )
-                for output_node in node.users:
-                    if output_node in self.all_nodes_info:
-                        self.all_nodes_info[output_node].node_type = NodeType.GRAD
-                    else:
-                        self.all_nodes_info[output_node] = NodeAttributes(
-                            node_type=NodeType.GRAD,
-                            rank=None,
-                            gtype_is_forward=False,
-                            last_fw_access = None,
-                            first_bw_access = None,
-                            last_bw_access = None
-                        )
-
-            # main initial profiling logic
-            if building_graph:
-                # add self; might already be in there from 'using' optimizer
+            if in_forward:
+                # add self
                 if node not in self.all_nodes_info:
                     self.all_nodes_info[node] = NodeAttributes(
-                        node_type=self._initial_categorize_node(node), 
+                        node_type=None, 
                         rank=rank, 
                         gtype_is_forward=True,
                         last_fw_access = None,
@@ -168,28 +139,66 @@ class GraphProfiler(fx.Interpreter):
                         last_bw_access = None
                     )
                 else:
+                    print("Unexpected error: node already in all_nodes_info", node.name, flush=True)
                     self.all_nodes_info[node].rank = rank
+                
                 # update other nodes info
                 for input_node in node.all_input_nodes:
                     self.all_nodes_info[input_node].last_fw_access = node
-                    # shouldn't throw error by topological sort
             else:
                 # add self
                 if node not in self.all_nodes_info:
                     self.all_nodes_info[node] = NodeAttributes(
-                        node_type=self._initial_categorize_node(node), 
+                        node_type=None, 
                         rank=rank, 
                         gtype_is_forward=False,
                         last_fw_access = None,
                         first_bw_access = None,
                         last_bw_access = None
                     )
+                else:
+                    # don't update anything else but warn
+                    print("Unexpected error: node already in all_nodes_info during backwards pass", node.name, flush=True)
                 
-                # update other nodes' info
+                # update other nodes' info for usage
                 for input_node in node.all_input_nodes:
                     if self.all_nodes_info[input_node].first_bw_access is None:
                         self.all_nodes_info[input_node].first_bw_access = node
                     self.all_nodes_info[input_node].last_bw_access = node
+
+        # Second pass to correctly classify node types
+        found_optimizer = False
+        param_nodes_to_update = []
+        grad_nodes_to_update = []
+        for node in self.module.graph.nodes:
+            if node not in self.all_nodes_info:
+                print("Unexpected error: node not in all_nodes_info", node.name, flush=True)
+                continue
+            else:
+                self.all_nodes_info[node].node_type = self._initial_categorize_node(node)
+
+            if '_fused_adam' in node.name and node.target == torch.ops.aten._fused_adam.default:
+                found_optimizer = True
+                print("Found optimizer node during initialization", flush=True)
+                param_nodes_to_update = node.args[0]
+                grad_nodes_to_update = node.args[1]
+
+        # final classification should be with optimizer node information
+        if not found_optimizer:
+            print("Did not find optimizer node during initialization", flush=True)
+        for input_node in param_nodes_to_update:
+            self.all_nodes_info[input_node].node_type = NodeType.PARAM
+        for output_node in grad_nodes_to_update:
+            self.all_nodes_info[output_node].node_type = NodeType.GRAD
+
+        if self.verbose:
+            # print out everything needed
+            for node in self.all_nodes_info:
+                print(f"Node: ", node.name, self.all_nodes_info[node], flush=True)
+                # if self.all_nodes_info[node].node_type == NodeType.ACT:
+                #     print(f"Activation node: ", node.name, self.all_nodes_info[node], flush=True)
+                # if self.all_nodes_info[node].node_type == NodeType.OTHER:
+                #     print(f"Other node: ", node.name, self.all_nodes_info[node], flush=True)
 
     def _initial_categorize_node(self, node: fx.Node) -> NodeType:
         if node.op == 'placeholder':
@@ -197,13 +206,24 @@ class GraphProfiler(fx.Interpreter):
             return NodeType.PARAM
 
         node_name = node.name.lower()
-        if 'relu' in node_name or 'conv' in node_name or 'pool' in node_name or 'gelu' in node_name or 'sigm' in node_name or 'tanh' in node_name or 'softmax' in node_name:
+        guaranteed_activation_names = ['relu', 'gelu', 'sigm', 'tanh', 'softmax']
+        other_feature_map_names = ['conv', 'pool', 'aten', 'mm', 'fc', 'lin', 'batchnorm', 'dropout', 'mul', 'sub', 'add', 'view', 'getitem', 'transpos']
+        # TODO look through printouts more carefully to ensure this is the best (are there some other rules?)
+        if any(guaranteed_activation_name in node_name for guaranteed_activation_name in guaranteed_activation_names):
             return NodeType.ACT
+        elif any(feature_map_name in node_name for feature_map_name in other_feature_map_names):
+            # this might be a feature map but we must also determine if it has appropriate 'use cases' in the graph
+            # either must be created in forward pass and used in backward pass, or an in-place operation
+            if (self.all_nodes_info[node].gtype_is_forward) and ((self.all_nodes_info[node].last_fw_access is None and self.all_nodes_info[node].first_bw_access is None) or (self.all_nodes_info[node].first_bw_access is not None)):
+                return NodeType.ACT
+            else:
+                if self.verbose:
+                    print("False positive for activation node", node.name, self.all_nodes_info[node], flush=True)
+                return NodeType.OTHER
         elif 'tag_grad' in node_name:
             return NodeType.GRAD
         else:
             return NodeType.OTHER
-            # are these all matrix multiplies e.g.?
 
     def _is_backward_start(self, node: fx.Node) -> bool:
         node_name = node.name.lower()
@@ -236,7 +256,9 @@ class GraphProfiler(fx.Interpreter):
         result = super().run_node(n)
         end.record()
         torch.cuda.current_stream().synchronize()
-        self.total_time_elapsed += start.elapsed_time(end)
+        node_time = start.elapsed_time(end)
+        self.all_nodes_info[n].run_time += node_time
+        self.total_time_elapsed += node_time
 
         # Measure and update memory
         self._update_memory_stats()
@@ -261,6 +283,7 @@ class GraphProfiler(fx.Interpreter):
         # Cumulative memory stats to update
         cpu_memory_usage = 0
         gpu_memory_usage = 0
+        # TODO make sure this is only their GPU memory usage....
         param_memory_usage = 0
         activation_memory_usage = 0
         grad_memory_usage = 0
@@ -280,16 +303,16 @@ class GraphProfiler(fx.Interpreter):
                 # update memory stats
                 if self._is_on_gpu(node_tensor):
                     gpu_memory_usage += mem_usage
+                    if node_category == NodeType.PARAM:
+                        param_memory_usage += mem_usage
+                    elif node_category == NodeType.ACT:
+                        activation_memory_usage += mem_usage
+                    elif node_category == NodeType.GRAD:
+                        grad_memory_usage += mem_usage
+                    elif node_category == NodeType.OTHER:
+                        other_memory_usage += mem_usage
                 else:
                     cpu_memory_usage += mem_usage
-                if node_category == NodeType.PARAM:
-                    param_memory_usage += mem_usage
-                elif node_category == NodeType.ACT:
-                    activation_memory_usage += mem_usage
-                elif node_category == NodeType.GRAD:
-                    grad_memory_usage += mem_usage
-                elif node_category == NodeType.OTHER:
-                    other_memory_usage += mem_usage
         # Update memory stats
         self.memory_stats.peak_memory_usage = max(gpu_memory_usage + cpu_memory_usage, self.memory_stats.peak_memory_usage)
         self.memory_stats.cpu_memory_usages.append(cpu_memory_usage)
