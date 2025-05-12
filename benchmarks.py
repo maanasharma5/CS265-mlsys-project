@@ -114,6 +114,12 @@ class Experiment:
             graph_profiler.print_stats()
             graph_profiler.dump_stats(f"results/{self.model_name}_batch{self.batch_size}_graph_profiler_stats.json")
 
+        # TODO put activation checkpointing here?
+        # new_graph_module = activation_checkpointing(gm)
+        # maybe with gm = remove_detach_nodes(gm) before
+
+        # do we need to run the profiler on the new graph?
+
         return gm
 
     def run(self):
