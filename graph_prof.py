@@ -69,8 +69,16 @@ class NodeAttributes:
     last_bw_access: fx.Node = None
 
 
+def calculate_memory_usage(tensor: torch.Tensor) -> int:
+    """
+    Calculate the memory usage of a tensor in bytes.
+    """
+    if tensor is None:
+        return 0
+    return tensor.element_size() * tensor.nelement()
+
 class GraphProfiler(fx.Interpreter):
-    def __init__(self, module: fx.GraphModule, garbage_collect_values: bool = True, verbose=False):
+    def __init__(self, module: fx.GraphModule, to_swap: bool = False, garbage_collect_values: bool = True, verbose=False):
         super().__init__(module, garbage_collect_values)
         self.verbose = verbose
         
@@ -237,6 +245,7 @@ class GraphProfiler(fx.Interpreter):
     ) -> Any:
         
         self.num_runs += 1
+        sel.in_forward_pass = True
         return super().run(
             *args, initial_env=initial_env, enable_io_processing=enable_io_processing
         )
@@ -277,6 +286,16 @@ class GraphProfiler(fx.Interpreter):
         return node.device.type != 'cpu'
 
 
+    def _swap_out(self, node: fx.Node) -> None:
+        # not sure if i should be doing swapping AND recomputation or just recomputation
+        return None
+
+    def _swap_in(self, node: fx.Node) -> None:
+        # not sure if i should be swapping AND recomputation or just recomputation
+        return None
+
+
+
     def _update_memory_stats(self) -> None:
         # Choose to not do on a specific node because not scalable to other operations but this is not efficient
 
@@ -295,7 +314,7 @@ class GraphProfiler(fx.Interpreter):
             node_category = self.all_nodes_info[node].node_type
 
             if torch.is_tensor(node_tensor):
-                mem_usage = node_tensor.element_size() * node_tensor.nelement()
+                mem_usage = calculate_memory_usage(node_tensor)
                 # update node_info
                 self.all_nodes_info[node].active_mem = mem_usage
                 if mem_usage > self.all_nodes_info[node].peak_mem:
