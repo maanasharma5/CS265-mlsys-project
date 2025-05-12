@@ -1,10 +1,15 @@
 TODOs:
-- see graph_prof.py for questions to ask
-- profile by type, add additional statistics
+Phase 2: Activation Checkpointing algorithm (2 weeks - 20%)
+Using the inputs from the profiler, implement the activation checkpointing algorithm in μ-TWO that 
+decides the subset of the activations to be retained and the subset of the activations to be recomputed.
+- activation_checkpoint.py: implement algorithm
+- substitute into benchmarks.py (perhaps with an additional flag to perform acivation checkpointing)
+
+DUE DATE:
+- MAY 14
 
 
 NOTES:
-- comment out in starter_code.graph_transformation to see only graph because the processing code has very long outputs that exceed the terminal memory
 - don't edit graph_tracer.py -- just use
 - main work in graph_prof.py and then obviously doing the activation checkpointing
 - mu-Two paper and https://pytorch.org/docs/2.5/fx.html will be helpful
