@@ -101,7 +101,7 @@ class Experiment:
         if self.verbose:
             print(gm.graph.print_tabular())
         warm_up_iters, profile_iters = 2, 1 # 2, 3
-        graph_profiler = GraphProfiler(gm)
+        graph_profiler = GraphProfiler(gm) # TODO add some args in here
 
         with torch.no_grad():
             for _ in range(warm_up_iters):

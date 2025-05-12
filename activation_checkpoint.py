@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.fx as fx
-from typing import Dict
+from typing import Dict, List, Tuple
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch._functorch.partitioners import _extract_graph_with_inputs_outputs
 from graph_tracer import SEPFunction
+from graph_prof import GraphProfiler, NodeAttributes
 
 
 # We define a custom function that takes in two weight matrices that require
@@ -52,6 +53,20 @@ def get_name_to_node_map(gm: fx.GraphModule) -> Dict[str, fx.Node]:
         name_to_node[node.name] = node
     return name_to_node
 
+def _determine_nodes_to_recompute(gm: fx.GraphModule, name_to_node: Dict[str, fx.Node], all_nodes_info: Dict[fx.Node, NodeAttributes]
+                                  ) -> Tuple[List[fx.Node], List[List[fx.Node]], List[fx.Node]]:
+    # returns nodes_to_recompute, nodes_required_to_recompute, first_back_access
+    #  where all lists have the same length
+
+    # TODO this is a placeholder right now, we have to actually implement MuTWO
+
+    nodes_to_recompute = [name_to_node["relu"]]
+    nodes_required_to_recompute_nodes = [[name_to_node["w1_1"], name_to_node["x_1"]]]
+    first_back_accesses = [name_to_node["t"]]
+    return nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
+
+    
+
 
 def activation_checkpointing(gm: fx.GraphModule) -> fx.GraphModule:
     # NOTE: You need to create the function for your project and call it inside
@@ -75,45 +90,49 @@ def activation_checkpointing(gm: fx.GraphModule) -> fx.GraphModule:
     # intermediate nodes that are checkpointed.
 
     name_to_node = get_name_to_node_map(gm)
-    first_back_access = name_to_node["t"]
-    node_to_recompute = [name_to_node["relu"]]
-    node_to_recompute_names = ["relu"]
-    nodes_required_to_recompute = [name_to_node["w1_1"], name_to_node["x_1"]]
+    nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses =  _determine_nodes_to_recompute(gm, name_to_node, {})
+
+    print(nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses, flush=True)
 
     # NOTE: we cannot directly use 'mm' to recompute 'relu' since 'mm' is not an
     # intermediate node that is retained (checkpointed).
 
-    # Obtain a sub-graph that recomputes the required nodes
-    recompute_subgraph = _extract_graph_with_inputs_outputs(
-        joint_graph=gm.graph,
-        inputs=nodes_required_to_recompute,
-        outputs=node_to_recompute,
-    )
-    print("Extracted recomputation sub-graph: ")
-    recompute_subgraph.print_tabular()
+    for node_to_recompute, nodes_required_to_recompute, first_back_access in zip(
+        nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
+    ):
+        print(node_to_recompute, nodes_required_to_recompute, first_back_access, flush=True)
+        # Obtain a sub-graph that recomputes the required nodes
+        recompute_subgraph = _extract_graph_with_inputs_outputs(
+            joint_graph=gm.graph,
+            inputs=nodes_required_to_recompute,
+            outputs=[node_to_recompute],
+        )
+        print("Extracted recomputation sub-graph: ")
+        recompute_subgraph.print_tabular()
 
-    # Insert the nodes of the new sub-graph in the old graph before the first
-    # backward access of the node to be recomputed.
-    with gm.graph.inserting_before(first_back_access):
-        for n in recompute_subgraph.nodes:
-            if n.op == "placeholder" or n.op == "output":
-                continue
-            # Copy the nodes of the new sub-graph to old graph and transform its
-            # inputs to match the old-graph inputs. The arg_transform function
-            # will pass the input arguments of the new node and will expect a
-            # mapping to the nodes of the old graph.
-            new_node = gm.graph.node_copy(
-                n, arg_transform=lambda arg: name_to_node[arg.name]
-            )
+        # Insert the nodes of the new sub-graph in the old graph before the first
+        # backward access of the node to be recomputed.
+        with gm.graph.inserting_before(first_back_access):
+            for n in recompute_subgraph.nodes:
+                if n.op == "placeholder" or n.op == "output":
+                    continue
 
-            if n.name in node_to_recompute_names:
-                old_node = name_to_node[n.name]
-                # Replace all the uses of the old node with new recomputation node
-                replace_subsequent_uses_of(
-                    gm.graph, old_node=old_node, new_node=new_node
+                # Copy the nodes of the new sub-graph to old graph and transform its
+                # inputs to match the old-graph inputs. The arg_transform function
+                # will pass the input arguments of the new node and will expect a
+                # mapping to the nodes of the old graph.
+                new_node = gm.graph.node_copy(
+                    n, arg_transform=lambda arg: name_to_node[arg.name]
                 )
-            # Add the new node to our name to node mapping
-            name_to_node[n.name] = new_node
+
+                if n.name in [recomp_node.name for recomp_node in nodes_to_recompute]:
+                    old_node = name_to_node[n.name]
+                    # Replace all the uses of the old node with new recomputation node
+                    replace_subsequent_uses_of(
+                        gm.graph, old_node=old_node, new_node=new_node
+                    )
+                # Add the new node to our name to node mapping
+                name_to_node[n.name] = new_node
 
     gm.graph.lint()
     gm.recompile()
