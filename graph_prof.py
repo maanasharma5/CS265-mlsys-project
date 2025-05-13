@@ -80,7 +80,7 @@ def calculate_memory_usage(tensor: torch.Tensor) -> int:
 class GraphProfiler(fx.Interpreter):
     def __init__(self, module: fx.GraphModule, to_swap: bool = False, garbage_collect_values: bool = True, verbose=False):
         super().__init__(module, garbage_collect_values)
-        self.verbose = verbose
+        self.verbose = False
         
         # Fields for statistics
         self.num_runs: int = 0
@@ -214,8 +214,8 @@ class GraphProfiler(fx.Interpreter):
             return NodeType.PARAM
 
         node_name = node.name.lower()
-        guaranteed_activation_names = ['relu', 'gelu', 'sigm', 'tanh', 'softmax']
-        other_feature_map_names = ['conv', 'pool', 'aten', 'mm', 'fc', 'lin', 'batchnorm', 'dropout', 'mul', 'sub', 'add', 'view', 'getitem', 'transpos']
+        guaranteed_activation_names = []
+        other_feature_map_names = ['relu', 'gelu', 'sigm', 'tanh', 'softmax','conv', 'pool', 'aten', 'mm', 'fc', 'lin', 'batchnorm', 'dropout', 'mul', 'sub', 'add', 'view', 'getitem', 'transpos']
         # TODO look through printouts more carefully to ensure this is the best (are there some other rules?)
         if any(guaranteed_activation_name in node_name for guaranteed_activation_name in guaranteed_activation_names):
             return NodeType.ACT
@@ -370,4 +370,5 @@ class GraphProfiler(fx.Interpreter):
             dict_to_dump = asdict(self.memory_stats)
             dict_to_dump['rank_of_backward'] = self.rank_of_backward
             json.dump(dict_to_dump, f)
+        print(f"Dumped graph profiler stats to {path}", flush=True)
         

@@ -31,13 +31,14 @@ model_batch_sizes: Dict[str, int] = {
 
 
 class Experiment:
-    def __init__(self, model_name: str, batch_size: int, to_recompute: bool, verbose=False, extra_args=[]):
+    def __init__(self, model_name: str, batch_size: int, num_to_do: int, to_recompute: bool, verbose=False, extra_args=[]):
         assert model_name in model_names, f"Model {model_name} not found in model names {model_names}"
         dev = torch.device("cuda")
         self.model_name = model_name
         self.batch_size = batch_size
         self.verbose = verbose
         self.to_recompute = to_recompute
+        self.num_to_do = num_to_do
 
         if self.model_name == "Transformer":
 
@@ -104,10 +105,10 @@ class Experiment:
         if self.verbose:
             print(gm.graph.print_tabular())
         warm_up_iters, profile_iters = 2, 1 # 2, 3
-        graph_profiler = GraphProfiler(gm) # TODO add some args in here
+        graph_profiler = GraphProfiler(gm, verbose=self.verbose) # TODO add some args in here
 
         dump_name = f"results/{self.model_name}_batch{self.batch_size}_graph_profiler_stats.json"
-        recomputed_dump_name = f"results/{self.model_name}_batch{self.batch_size}_recompute_graph_profiler_stats.json"
+        recomputed_dump_name = f"results/{self.model_name}_batch{self.batch_size}_recomputed_graph_profiler_stats.json"
 
         with torch.no_grad():
             for _ in range(warm_up_iters):
@@ -124,12 +125,13 @@ class Experiment:
 
         if self.to_recompute:
             peak_mem = graph_profiler.memory_stats.peak_memory_usage
-            max_mem = int(peak_mem / 2)
+            max_mem = int(0.9*peak_mem)
             recomputer = RecompDecision(gm, graph_profiler.all_nodes_info)
             recomputer.determine_recomp_nodes(peak_mem, max_mem)
 
-            rgm = activation_checkpointing(gm, graph_profiler.all_nodes_info, recomputer)
+            rgm = activation_checkpointing(gm, graph_profiler.all_nodes_info, recomputer, self.num_to_do, verbose=self.verbose)
 
+            print("Profiling recomputed graph")
             recomputed_graph_profiler = GraphProfiler(rgm)
             with torch.no_grad():
                 for _ in range(warm_up_iters):

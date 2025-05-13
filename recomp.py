@@ -1,7 +1,8 @@
 import torch.fx as fx
 from typing import Any, Dict, List, Tuple, Set
-from graph_prof import GraphProfiler, NodeAttributes, NodeType
+from graph_prof import GraphProfiler, NodeAttributes, NodeType, OP
 from dataclasses import dataclass, field, asdict
+from time import time
 
 # Recomputation Decision without Swapping-optimized Scheduling -- as described in https://www.youtube.com/watch?v=GBzar0GQrJo
 # Largely from Appendix A.4 of MuTWO paper
@@ -41,28 +42,68 @@ class RecompAttributes:
 
 class RecompDecision:
     def __init__(self, gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes]):
+        print("Initializing RecompDecision", flush=True)
         self.gm = gm
         self.profile_node_info = profile_node_info
 
-        self.candidate_nodes: Dict[fx.Node, RecompAttributes] = {}
-        intermediate_nodes = [node for node in gm.graph.nodes if self.profile_node_info[node].node_type == NodeType.ACT] # initialize with all activation (intermediate) nodes
-        for node in intermediate_nodes:
-            attrs = RecompAttributes()
-            attrs.memory_usage = self.profile_node_info[node].peak_mem
-            attrs.recomp_srcs = self._find_srcs(node, set())
-            attrs.recomp_time = sum([self.profile_node_info[src].run_time for src in attrs.recomp_srcs]) + self.profile_node_info[node].run_time
-            attrs.recomp_cnt = 0
+        self._src_cache: Dict[fx.Node, Set[fx.Node]] = {}
 
         self.recomp_nodes: Dict[fx.Node, RecompAttributes] = {}
 
-    def _find_srcs(self, node: fx.Node, srcs: Set[fx.Node]) -> Set[fx.Node]:
-        # accumulate srcs in srcs param
-        for src in node.all_input_nodes:
-            if self.profile_node_info[src].node_type == NodeType.ACT: # TODO does this have to be anything more complicated?
-                srcs.add(src)
+        self.candidate_nodes: Dict[fx.Node, RecompAttributes] = {}
+        intermediate_nodes = [node for node in gm.graph.nodes if self.profile_node_info[node].node_type == NodeType.ACT] # initialize with all activation (intermediate) nodes
+        print(f"Found {len(intermediate_nodes)} intermediate nodes", flush=True)
+        for node in intermediate_nodes:
+            start = time()
+            attrs = RecompAttributes()
+            attrs.memory_usage = self.profile_node_info[node].peak_mem
+            attrs.recomp_srcs = self._find_srcs(node)
+            attrs.recomp_time = sum(self.profile_node_info[src].run_time for src in attrs.recomp_srcs) + self.profile_node_info[node].run_time
+            attrs.recomp_cnt = 0
+            self.candidate_nodes[node] = attrs
+            end = time()
+            print(f"Found {len(attrs.recomp_srcs)} srcs for node {node.name} in {end - start:.4f} seconds", flush=True)
+
+        print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
+
+    # def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
+    #     if node in self._src_cache:
+    #         return self._src_cache[node]
+
+    #     srcs: Set[fx.Node] = set()
+    #     for src in node.all_input_nodes:
+    #         if src.op in [OP.OUTPUT, OP.PLACEHOLDER]:
+    #             srcs.add(src)
+    #         # if src is a parameter, we don't need to recompute it
+    #         if self.profile_node_info[src].node_type == NodeType.ACT:
+    #             srcs.add(src)
+    #         else:
+    #             srcs.update(self._find_srcs(src))
+
+    #     self._src_cache[node] = srcs
+    #     return srcs
+
+    def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
+        """
+        DFS with memoisation.  `retain` = activations we already agreed to keep.
+        """
+
+        LEAF_OPS = {"placeholder", "get_attr"}
+
+        if node in self._src_cache:
+            return self._src_cache[node]
+
+        frontier: Set[fx.Node] = set()
+        for inp in node.all_input_nodes:
+            if (inp.op in LEAF_OPS) or (inp in self.candidate_nodes.keys()):     # the *only* stopping rule
+                frontier.add(inp)
             else:
-                self._find_srcs(src, srcs)
-        return srcs
+                frontier.update(self._find_srcs(inp))
+
+        self._src_cache[node] = frontier
+        return frontier
+
+
 
 
     def _choose_max_recomp_ratio(self) -> fx.Node:
@@ -136,7 +177,7 @@ class RecompDecision:
             self._update_candidates_after_choice(cand)
             consumed_memory -= self.recomp_nodes[cand].memory_usage
 
-            print(f"Choosing to recompute node {cand.name}")
+            print(f"Choosing to recompute node {cand.name}", flush=True)
 
 
                 

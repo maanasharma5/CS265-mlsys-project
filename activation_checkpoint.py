@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.fx as fx
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch._functorch.partitioners import _extract_graph_with_inputs_outputs
 from graph_tracer import SEPFunction
@@ -84,8 +84,63 @@ def get_name_to_node_map(gm: fx.GraphModule) -> Dict[str, fx.Node]:
 #     first_back_accesses = [name_to_node["t"]]
 #     return nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
 
+def topo_sort(nodes):
+    seen = set()
+    sorted_nodes = []
 
-def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], recomp_decision: RecompDecision) -> fx.GraphModule:
+    def visit(n):
+        if n in seen:
+            return
+        seen.add(n)
+        for arg in n.all_input_nodes:
+            visit(arg)
+        sorted_nodes.append(n)
+
+    for node in nodes:
+        visit(node)
+
+    return sorted_nodes
+
+LEAF_OPS = {"placeholder", "get_attr"}
+
+def close_frontier(joint_graph: fx.Graph,
+                   outputs: List[fx.Node],
+                   inputs: Set[fx.Node],
+                   retain: Set[fx.Node]) -> List[fx.Node]:
+    """
+    Expands `inputs` in-place so that every tensor ancestor of `outputs`
+    is covered by   inputs ∪ retain ∪ LEAF_OPS.
+    Returns the final (deduplicated) input list.
+    """
+    stack = list(outputs)
+    seen  = set(stack)
+
+    while stack:
+        n = stack.pop()
+        for inp in n.all_input_nodes:
+            if inp in seen:
+                continue
+            seen.add(inp)
+
+            if (inp.op in LEAF_OPS) or (inp in retain):
+                inputs.add(inp)
+            else:
+                # internal op – keep digging
+                stack.append(inp)
+
+    # functorch wants a *list* whose order matches joint_graph.nodes
+    ordered_inputs = [n for n in joint_graph.nodes if n in inputs]
+    return ordered_inputs
+
+def _assert_frontier_complete(node, frontier):
+    for inp in node.all_input_nodes:
+        if inp not in frontier:
+            assert inp.op not in {"placeholder", "get_attr"} and inp not in frontier,\
+                f"{node.name}: tensor input {inp.name} missing from frontier"
+
+
+
+def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], recomp_decision: RecompDecision, num_to_do: int, verbose: bool = False) -> fx.GraphModule:
     # NOTE: You need to create the function for your project and call it inside
     # the graph_transformation function after performing graph profiling.
 
