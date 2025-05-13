@@ -4,5 +4,5 @@ Forked from the starter code for [Harvard CS265 ML Systems project](http://dasla
 
 ## How to start
 1. Create a virtual environment using Python 3.12 and requirements.txt
-2. Run the main python file.
+2. Recreate benchmarks using figures.ipynb
 
