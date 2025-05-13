@@ -6,6 +6,7 @@ from torch.fx.experimental.proxy_tensor import make_fx
 from torch._functorch.partitioners import _extract_graph_with_inputs_outputs
 from graph_tracer import SEPFunction
 from graph_prof import GraphProfiler, NodeAttributes
+from recomp import RecompDecision, RecompAttributes
 
 
 # We define a custom function that takes in two weight matrices that require
@@ -53,66 +54,56 @@ def get_name_to_node_map(gm: fx.GraphModule) -> Dict[str, fx.Node]:
         name_to_node[node.name] = node
     return name_to_node
 
-def _determine_nodes_to_recompute(gm: fx.GraphModule, name_to_node: Dict[str, fx.Node], all_nodes_info: Dict[fx.Node, NodeAttributes]
-                                  ) -> Tuple[List[fx.Node], List[List[fx.Node]], List[fx.Node]]:
-    # returns nodes_to_recompute, nodes_required_to_recompute, first_back_access
-    #  where all lists have the same length
+# def _determine_nodes_to_recompute(gm: fx.GraphModule, name_to_node: Dict[str, fx.Node], all_nodes_info: Dict[fx.Node, NodeAttributes]
+#                                   ) -> Tuple[List[fx.Node], List[List[fx.Node]], List[fx.Node]]:
+#     # returns nodes_to_recompute, nodes_required_to_recompute, first_back_access
+#     #  where all lists have the same length
 
-    # TODO this is a placeholder right now, we have to actually implement MuTWO
+#     # In this example we are going to recompute one of the relu activations for the
+#     # backward pass instead of saving it. We know from our custom function
+#     # that we have 2 intermeidate nodes: ['relu', 'relu_1']
 
-    nodes_to_recompute = [name_to_node["relu"]]
-    nodes_required_to_recompute_nodes = [[name_to_node["w1_1"], name_to_node["x_1"]]]
-    first_back_accesses = [name_to_node["t"]]
-    return nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
+#     # So the intermediate node to recompute is: ['relu'] and
+#     # intermediate nodes to checkpoint (retain) are: ['relu_1']
 
-    
+#     # Nodes required to recompute 'relu' are ['w1_1', 'x_1']
+#     # First back use is at node 't'
+
+#     # NOTE: For your project, you will use GraphProfiler to identify the
+#     # intermediate nodes, their first back access, last forward access and
+#     # then MuTWO's algorithm to select the intermediate 'nodes_to_recompute' and
+#     # checkpoint (retain). The 'nodes_required_to_recompute' any of the
+#     # intermediate nodes MUST be a subset of the placeholder nodes and the
+#     # intermediate nodes that are checkpointed.
+
+#     # NOTE: we cannot directly use 'mm' to recompute 'relu' since 'mm' is not an
+#     # intermediate node that is retained (checkpointed).
+
+#     nodes_to_recompute = [name_to_node["relu"]]
+#     nodes_required_to_recompute_nodes = [[name_to_node["w1_1"], name_to_node["x_1"]]]
+#     first_back_accesses = [name_to_node["t"]]
+#     return nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
 
 
-def activation_checkpointing(gm: fx.GraphModule) -> fx.GraphModule:
+def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], recomp_decision: RecompDecision) -> fx.GraphModule:
     # NOTE: You need to create the function for your project and call it inside
     # the graph_transformation function after performing graph profiling.
 
-    # In this example we are going to recompute one of the relu activations for the
-    # backward pass instead of saving it. We know from our custom function
-    # that we have 2 intermeidate nodes: ['relu', 'relu_1']
-
-    # So the intermediate node to recompute is: ['relu'] and
-    # intermediate nodes to checkpoint (retain) are: ['relu_1']
-
-    # Nodes required to recompute 'relu' are ['w1_1', 'x_1']
-    # First back use is at node 't'
-
-    # NOTE: For your project, you will use GraphProfiler to identify the
-    # intermediate nodes, their first back access, last forward access and
-    # then MuTWO's algorithm to select the intermediate 'nodes_to_recompute' and
-    # checkpoint (retain). The 'nodes_required_to_recompute' any of the
-    # intermediate nodes MUST be a subset of the placeholder nodes and the
-    # intermediate nodes that are checkpointed.
-
     name_to_node = get_name_to_node_map(gm)
-    nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses =  _determine_nodes_to_recompute(gm, name_to_node, {})
 
-    print(nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses, flush=True)
-
-    # NOTE: we cannot directly use 'mm' to recompute 'relu' since 'mm' is not an
-    # intermediate node that is retained (checkpointed).
-
-    for node_to_recompute, nodes_required_to_recompute, first_back_access in zip(
-        nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
-    ):
-        print(node_to_recompute, nodes_required_to_recompute, first_back_access, flush=True)
+    for rp, rp_attrs in recomp_decision.recomp_nodes.items():
         # Obtain a sub-graph that recomputes the required nodes
         recompute_subgraph = _extract_graph_with_inputs_outputs(
             joint_graph=gm.graph,
-            inputs=nodes_required_to_recompute,
-            outputs=[node_to_recompute],
+            inputs=list(rp_attrs.recomp_srcs),
+            outputs=[rp],
         )
         print("Extracted recomputation sub-graph: ")
         recompute_subgraph.print_tabular()
 
         # Insert the nodes of the new sub-graph in the old graph before the first
         # backward access of the node to be recomputed.
-        with gm.graph.inserting_before(first_back_access):
+        with gm.graph.inserting_before(profile_node_info[rp].first_bw_access):
             for n in recompute_subgraph.nodes:
                 if n.op == "placeholder" or n.op == "output":
                     continue
@@ -125,7 +116,7 @@ def activation_checkpointing(gm: fx.GraphModule) -> fx.GraphModule:
                     n, arg_transform=lambda arg: name_to_node[arg.name]
                 )
 
-                if n.name in [recomp_node.name for recomp_node in nodes_to_recompute]:
+                if n.name in [rp.name]:
                     old_node = name_to_node[n.name]
                     # Replace all the uses of the old node with new recomputation node
                     replace_subsequent_uses_of(
@@ -157,8 +148,25 @@ if __name__ == "__main__":
     with torch.no_grad():
         old_grads = graph_module(w1, w2, x)
 
+    # Obtain the graph profiling information
+    graph_profiler = GraphProfiler(graph_module)
+    # with torch.no_grad():
+    #     for _ in range(2):
+    #         graph_profiler.run()
+    #     graph_profiler.reset_stats()
+
+    #     for _ in range(1):
+    #         graph_profiler.run()
+    #     graph_profiler.aggregate_stats()
+    # TODO this does not work we have some placeholder error in the profiler
+
+    # Calculate recomp decision
+    peak_mem = graph_profiler.memory_stats.peak_memory_usage
+    recomp = RecompDecision(graph_module, graph_profiler.all_nodes_info)
+    recomp.determine_recomp_nodes(peak_mem, 0.9*peak_mem)
+
     # Apply the activation checkpointing algorithm (check new node 'relu_2')
-    new_graph_module = activation_checkpointing(graph_module)
+    new_graph_module = activation_checkpointing(graph_module, graph_profiler.all_nodes_info, recomp)
     print("Modified graph of custom fn (fwd+bwd+activation_checkpointing): ")
     new_graph_module.graph.print_tabular()
 
