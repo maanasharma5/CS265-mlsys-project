@@ -80,7 +80,7 @@ def calculate_memory_usage(tensor: torch.Tensor) -> int:
 class GraphProfiler(fx.Interpreter):
     def __init__(self, module: fx.GraphModule, to_swap: bool = False, garbage_collect_values: bool = True, verbose=False):
         super().__init__(module, garbage_collect_values)
-        self.verbose = False
+        self.verbose = verbose
         
         # Fields for statistics
         self.num_runs: int = 0
@@ -202,11 +202,11 @@ class GraphProfiler(fx.Interpreter):
         if self.verbose:
             # print out everything needed
             for node in self.all_nodes_info:
-                print(f"Node: ", node.name, self.all_nodes_info[node], flush=True)
-                # if self.all_nodes_info[node].node_type == NodeType.ACT:
-                #     print(f"Activation node: ", node.name, self.all_nodes_info[node], flush=True)
-                # if self.all_nodes_info[node].node_type == NodeType.OTHER:
-                #     print(f"Other node: ", node.name, self.all_nodes_info[node], flush=True)
+                # print(f"Node: ", node.name, self.all_nodes_info[node], flush=True)
+                if self.all_nodes_info[node].node_type == NodeType.ACT:
+                    print(f"Activation node: ", node.name, self.all_nodes_info[node], flush=True)
+                if self.all_nodes_info[node].node_type == NodeType.OTHER:
+                    print(f"Other node: ", node.name, self.all_nodes_info[node], flush=True)
 
     def _initial_categorize_node(self, node: fx.Node) -> NodeType:
         if node.op == 'placeholder':
@@ -369,6 +369,7 @@ class GraphProfiler(fx.Interpreter):
         with open(path, 'w') as f:
             dict_to_dump = asdict(self.memory_stats)
             dict_to_dump['rank_of_backward'] = self.rank_of_backward
+            dict_to_dump['avg_time_per_run'] = self.all_aggregated_stats.time_per_run
             json.dump(dict_to_dump, f)
         print(f"Dumped graph profiler stats to {path}", flush=True)
         

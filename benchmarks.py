@@ -102,8 +102,7 @@ class Experiment:
         self.optimizer.zero_grad()
 
     def graph_transformation(self, gm: fx.GraphModule, args: Any) -> fx.GraphModule:
-        if self.verbose:
-            print(gm.graph.print_tabular())
+        gm.graph.print_tabular()
         warm_up_iters, profile_iters = 2, 1 # 2, 3
         graph_profiler = GraphProfiler(gm, verbose=self.verbose) # TODO add some args in here
 
@@ -126,12 +125,12 @@ class Experiment:
         if self.to_recompute:
             peak_mem = graph_profiler.memory_stats.peak_memory_usage
             max_mem = int(peak_mem/2)
-            recomputer = RecompDecision(gm, graph_profiler.all_nodes_info)
+            recomputer = RecompDecision(gm, graph_profiler.all_nodes_info, verbose=self.verbose)
             recomputer.determine_recomp_nodes(peak_mem, max_mem)
 
             rgm = activation_checkpointing(gm, graph_profiler.all_nodes_info, recomputer, self.num_to_do, verbose=self.verbose)
 
-            print("Profiling recomputed graph")
+            print("Profiling recomputed graph", flush=True)
             recomputed_graph_profiler = GraphProfiler(rgm)
             with torch.no_grad():
                 for _ in range(warm_up_iters):

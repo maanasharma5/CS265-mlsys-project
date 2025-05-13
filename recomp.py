@@ -41,8 +41,10 @@ class RecompAttributes:
 
 
 class RecompDecision:
-    def __init__(self, gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes]):
-        print("Initializing RecompDecision", flush=True)
+    def __init__(self, gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], verbose: bool = False) -> None:
+        self.verbose = verbose
+        if self.verbose:
+            print("Initializing RecompDecision", flush=True)
         self.gm = gm
         self.profile_node_info = profile_node_info
 
@@ -52,7 +54,9 @@ class RecompDecision:
 
         self.candidate_nodes: Dict[fx.Node, RecompAttributes] = {}
         intermediate_nodes = [node for node in gm.graph.nodes if self.profile_node_info[node].node_type == NodeType.ACT] # initialize with all activation (intermediate) nodes
-        print(f"Found {len(intermediate_nodes)} intermediate nodes", flush=True)
+        
+        if self.verbose: 
+            print(f"Found {len(intermediate_nodes)} intermediate nodes", flush=True)
         for node in intermediate_nodes:
             start = time()
             attrs = RecompAttributes()
@@ -62,9 +66,11 @@ class RecompDecision:
             attrs.recomp_cnt = 0
             self.candidate_nodes[node] = attrs
             end = time()
-            print(f"Found {len(attrs.recomp_srcs)} srcs for node {node.name} in {end - start:.4f} seconds", flush=True)
+            if self.verbose:
+                print(f"Found {len(attrs.recomp_srcs)} srcs for node {node.name} in {end - start:.4f} seconds", flush=True)
 
-        print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
+        if self.verbose:
+            print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
 
     def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
         if node in self._src_cache:
@@ -177,7 +183,8 @@ class RecompDecision:
             self._update_candidates_after_choice(cand)
             consumed_memory -= self.recomp_nodes[cand].memory_usage
 
-            print(f"Choosing to recompute node {cand.name}", flush=True)
+            if self.verbose:
+                print(f"Choosing to recompute node {cand.name}", flush=True)
 
 
                 
