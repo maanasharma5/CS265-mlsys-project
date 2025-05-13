@@ -125,7 +125,7 @@ class Experiment:
 
         if self.to_recompute:
             peak_mem = graph_profiler.memory_stats.peak_memory_usage
-            max_mem = int(0.9*peak_mem)
+            max_mem = int(peak_mem/2)
             recomputer = RecompDecision(gm, graph_profiler.all_nodes_info)
             recomputer.determine_recomp_nodes(peak_mem, max_mem)
 

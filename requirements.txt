@@ -24,6 +24,7 @@ filelock==3.17.0
 fonttools==4.56.0
 fqdn==1.5.1
 fsspec==2025.2.0
+git-filter-repo==2.47.0
 h11==0.14.0
 httpcore==1.0.7
 httpx==0.28.1
@@ -105,6 +106,7 @@ requests==2.32.3
 rfc3339-validator==0.1.4
 rfc3986-validator==0.1.1
 rpds-py==0.23.1
+seaborn==0.13.2
 send2trash==1.8.3
 setuptools==75.8.0
 six==1.17.0

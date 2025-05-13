@@ -66,42 +66,42 @@ class RecompDecision:
 
         print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
 
-    # def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
-    #     if node in self._src_cache:
-    #         return self._src_cache[node]
-
-    #     srcs: Set[fx.Node] = set()
-    #     for src in node.all_input_nodes:
-    #         if src.op in [OP.OUTPUT, OP.PLACEHOLDER]:
-    #             srcs.add(src)
-    #         # if src is a parameter, we don't need to recompute it
-    #         if self.profile_node_info[src].node_type == NodeType.ACT:
-    #             srcs.add(src)
-    #         else:
-    #             srcs.update(self._find_srcs(src))
-
-    #     self._src_cache[node] = srcs
-    #     return srcs
-
     def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
-        """
-        DFS with memoisation.  `retain` = activations we already agreed to keep.
-        """
-
-        LEAF_OPS = {"placeholder", "get_attr"}
-
         if node in self._src_cache:
             return self._src_cache[node]
 
-        frontier: Set[fx.Node] = set()
-        for inp in node.all_input_nodes:
-            if (inp.op in LEAF_OPS) or (inp in self.candidate_nodes.keys()):     # the *only* stopping rule
-                frontier.add(inp)
+        srcs: Set[fx.Node] = set()
+        for src in node.all_input_nodes:
+            if src.op in [OP.PLACEHOLDER]:
+                srcs.add(src)
+            # if src is a parameter, we don't need to recompute it
+            if src in self.candidate_nodes.keys():
+                srcs.add(src)
             else:
-                frontier.update(self._find_srcs(inp))
+                srcs.update(self._find_srcs(src))
 
-        self._src_cache[node] = frontier
-        return frontier
+        self._src_cache[node] = srcs
+        return srcs
+
+    # def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
+    #     """
+    #     DFS with memoisation.  `retain` = activations we already agreed to keep.
+    #     """
+
+    #     LEAF_OPS = {"placeholder", "get_attr"}
+
+    #     if node in self._src_cache:
+    #         return self._src_cache[node]
+
+    #     frontier: Set[fx.Node] = set()
+    #     for inp in node.all_input_nodes:
+    #         if (inp.op in LEAF_OPS) or (inp in self.candidate_nodes.keys()):     # the *only* stopping rule
+    #             frontier.add(inp)
+    #         else:
+    #             frontier.update(self._find_srcs(inp))
+
+    #     self._src_cache[node] = frontier
+    #     return frontier
 
 
 
