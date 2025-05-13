@@ -13,6 +13,8 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
 from torchvision.models import resnet18, resnet50
 from graph_prof import GraphProfiler
 from graph_tracer import SEPFunction, compile
+from recomp import RecompDecision, RecompAttributes
+from activation_checkpoint import activation_checkpointing
 
 
 model_names: List[str] = [
@@ -29,12 +31,13 @@ model_batch_sizes: Dict[str, int] = {
 
 
 class Experiment:
-    def __init__(self, model_name: str, batch_size: int, verbose=False, extra_args=[]):
+    def __init__(self, model_name: str, batch_size: int, to_recompute: bool, verbose=False, extra_args=[]):
         assert model_name in model_names, f"Model {model_name} not found in model names {model_names}"
         dev = torch.device("cuda")
         self.model_name = model_name
         self.batch_size = batch_size
         self.verbose = verbose
+        self.to_recompute = to_recompute
 
         if self.model_name == "Transformer":
 
@@ -103,6 +106,9 @@ class Experiment:
         warm_up_iters, profile_iters = 2, 1 # 2, 3
         graph_profiler = GraphProfiler(gm) # TODO add some args in here
 
+        dump_name = f"results/{self.model_name}_batch{self.batch_size}_graph_profiler_stats.json"
+        recomputed_dump_name = f"results/{self.model_name}_batch{self.batch_size}_recompute_graph_profiler_stats.json"
+
         with torch.no_grad():
             for _ in range(warm_up_iters):
                 graph_profiler.run(*args)
@@ -111,16 +117,33 @@ class Experiment:
             for _ in range(profile_iters):
                 graph_profiler.run(*args)
             graph_profiler.aggregate_stats()
-            graph_profiler.print_stats()
-            graph_profiler.dump_stats(f"results/{self.model_name}_batch{self.batch_size}_graph_profiler_stats.json")
+            if self.verbose:
+                graph_profiler.print_stats()
+            graph_profiler.dump_stats(dump_name)
 
-        # TODO put activation checkpointing here?
-        # new_graph_module = activation_checkpointing(gm)
-        # maybe with gm = remove_detach_nodes(gm) before
 
-        # do we need to run the profiler on the new graph?
+        if self.to_recompute:
+            peak_mem = graph_profiler.memory_stats.peak_memory_usage
+            max_mem = int(peak_mem / 2)
+            recomputer = RecompDecision(gm, graph_profiler.all_nodes_info)
+            recomputer.determine_recomp_nodes(peak_mem, max_mem)
 
-        return gm
+            rgm = activation_checkpointing(gm, graph_profiler.all_nodes_info, recomputer)
+
+            recomputed_graph_profiler = GraphProfiler(rgm)
+            with torch.no_grad():
+                for _ in range(warm_up_iters):
+                    recomputed_graph_profiler.run(*args)
+                recomputed_graph_profiler.reset_stats()
+
+                for _ in range(profile_iters):
+                    recomputed_graph_profiler.run(*args)
+                recomputed_graph_profiler.aggregate_stats()
+                if self.verbose:
+                    recomputed_graph_profiler.print_stats()
+                recomputed_graph_profiler.dump_stats(recomputed_dump_name)
+
+        return rgm if self.to_recompute else gm
 
     def run(self):
         self.train_step(self.model, self.optimizer, self.example_inputs)
@@ -128,7 +151,7 @@ class Experiment:
 
 
 if __name__ == "__main__":
-    exp = Experiment(model_names[1], model_batch_sizes[model_names[1]])
+    exp = Experiment(model_names[1], model_batch_sizes[model_names[1]], to_recompute=False)
     exp.init_opt_states()
     compiled_fn = compile(exp.train_step, exp.graph_transformation)
     compiled_fn(exp.model, exp.optimizer, exp.example_inputs)

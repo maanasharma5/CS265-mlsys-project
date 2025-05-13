@@ -245,7 +245,7 @@ class GraphProfiler(fx.Interpreter):
     ) -> Any:
         
         self.num_runs += 1
-        sel.in_forward_pass = True
+        self.in_forward_pass = True
         return super().run(
             *args, initial_env=initial_env, enable_io_processing=enable_io_processing
         )
