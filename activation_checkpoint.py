@@ -84,59 +84,59 @@ def get_name_to_node_map(gm: fx.GraphModule) -> Dict[str, fx.Node]:
 #     first_back_accesses = [name_to_node["t"]]
 #     return nodes_to_recompute, nodes_required_to_recompute_nodes, first_back_accesses
 
-def topo_sort(nodes):
-    seen = set()
-    sorted_nodes = []
+# def topo_sort(nodes):
+#     seen = set()
+#     sorted_nodes = []
 
-    def visit(n):
-        if n in seen:
-            return
-        seen.add(n)
-        for arg in n.all_input_nodes:
-            visit(arg)
-        sorted_nodes.append(n)
+#     def visit(n):
+#         if n in seen:
+#             return
+#         seen.add(n)
+#         for arg in n.all_input_nodes:
+#             visit(arg)
+#         sorted_nodes.append(n)
 
-    for node in nodes:
-        visit(node)
+#     for node in nodes:
+#         visit(node)
 
-    return sorted_nodes
+#     return sorted_nodes
 
-LEAF_OPS = {"placeholder", "get_attr"}
+# LEAF_OPS = {"placeholder", "get_attr"}
 
-def close_frontier(joint_graph: fx.Graph,
-                   outputs: List[fx.Node],
-                   inputs: Set[fx.Node],
-                   retain: Set[fx.Node]) -> List[fx.Node]:
-    """
-    Expands `inputs` in-place so that every tensor ancestor of `outputs`
-    is covered by   inputs ∪ retain ∪ LEAF_OPS.
-    Returns the final (deduplicated) input list.
-    """
-    stack = list(outputs)
-    seen  = set(stack)
+# def close_frontier(joint_graph: fx.Graph,
+#                    outputs: List[fx.Node],
+#                    inputs: Set[fx.Node],
+#                    retain: Set[fx.Node]) -> List[fx.Node]:
+#     """
+#     Expands `inputs` in-place so that every tensor ancestor of `outputs`
+#     is covered by   inputs ∪ retain ∪ LEAF_OPS.
+#     Returns the final (deduplicated) input list.
+#     """
+#     stack = list(outputs)
+#     seen  = set(stack)
 
-    while stack:
-        n = stack.pop()
-        for inp in n.all_input_nodes:
-            if inp in seen:
-                continue
-            seen.add(inp)
+#     while stack:
+#         n = stack.pop()
+#         for inp in n.all_input_nodes:
+#             if inp in seen:
+#                 continue
+#             seen.add(inp)
 
-            if (inp.op in LEAF_OPS) or (inp in retain):
-                inputs.add(inp)
-            else:
-                # internal op – keep digging
-                stack.append(inp)
+#             if (inp.op in LEAF_OPS) or (inp in retain):
+#                 inputs.add(inp)
+#             else:
+#                 # internal op – keep digging
+#                 stack.append(inp)
 
-    # functorch wants a *list* whose order matches joint_graph.nodes
-    ordered_inputs = [n for n in joint_graph.nodes if n in inputs]
-    return ordered_inputs
+#     # functorch wants a *list* whose order matches joint_graph.nodes
+#     ordered_inputs = [n for n in joint_graph.nodes if n in inputs]
+#     return ordered_inputs
 
-def _assert_frontier_complete(node, frontier):
-    for inp in node.all_input_nodes:
-        if inp not in frontier:
-            assert inp.op not in {"placeholder", "get_attr"} and inp not in frontier,\
-                f"{node.name}: tensor input {inp.name} missing from frontier"
+# def _assert_frontier_complete(node, frontier):
+#     for inp in node.all_input_nodes:
+#         if inp not in frontier:
+#             assert inp.op not in {"placeholder", "get_attr"} and inp not in frontier,\
+#                 f"{node.name}: tensor input {inp.name} missing from frontier"
 
 
 
