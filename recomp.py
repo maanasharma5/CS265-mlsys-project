@@ -45,6 +45,9 @@ class RecompDecision:
         self.verbose = verbose
         if self.verbose:
             print("Initializing RecompDecision", flush=True)
+            print("profile_node_info", flush=True)
+            for node, attrs in profile_node_info.items():
+                print(f"Node {node.name}: {attrs}", flush=True)
         self.gm = gm
         self.profile_node_info = profile_node_info
 
@@ -69,8 +72,10 @@ class RecompDecision:
             if self.verbose:
                 print(f"Found {len(attrs.recomp_srcs)} srcs for node {node.name} in {end - start:.4f} seconds", flush=True)
 
-        if self.verbose:
-            print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
+        # if self.verbose:
+        #     print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
+        #     for node, attrs in self.candidate_nodes.items():
+        #         print(f"Node {node.name}: {attrs}", flush=True)
 
     def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
         if node in self._src_cache:
@@ -109,7 +114,12 @@ class RecompDecision:
     #     self._src_cache[node] = frontier
     #     return frontier
 
-
+    def _calculate_recomp_ratio(self, node: fx.Node) -> float:
+        # Algorithm C
+        # NOTE assumes that node is in candidate_nodes
+        total_recomp_time = max(self.candidate_nodes[node].recomp_time * self.candidate_nodes[node].recomp_cnt, 0)
+        recomp_ratio = self.candidate_nodes[node].memory_usage / (total_recomp_time) if total_recomp_time > 0 else 0
+        return recomp_ratio
 
 
     def _choose_max_recomp_ratio(self) -> fx.Node:
@@ -117,8 +127,7 @@ class RecompDecision:
         max_node = None
         for node, attrs in self.candidate_nodes.items():
             # choosing to compute each time for correctness in case of lagging updates
-            total_recomp_time = attrs.recomp_time * attrs.recomp_cnt
-            recomp_ratio = attrs.memory_usage / (total_recomp_time) if total_recomp_time > 0 else 0
+            recomp_ratio = self._calculate_recomp_ratio(node)
             if recomp_ratio > max_recomp_ratio:
                 max_recomp_ratio = recomp_ratio
                 max_node = node
@@ -127,7 +136,7 @@ class RecompDecision:
     def _update_recomps_after_choice(self, cand: fx.Node) -> int:
         # NOTE assumes that cand information is still in candidate_nodes
         # Algorithm E
-        cand_recomp_cnt = 1
+        cand_recomp_cnt = self.candidate_nodes[cand].recomp_cnt
         for recomped_node, recomped_node_attrs in self.recomp_nodes.items():
             cand_node_attrs = self.candidate_nodes[cand]
             if cand in recomped_node_attrs.recomp_srcs:
@@ -152,12 +161,12 @@ class RecompDecision:
                 cand_attrs.recomp_srcs.update(t_attrs.recomp_srcs)
                 # accumulate cand_recomp_time (different than stated algo)
                 cand_attrs.recomp_time += t_attrs.recomp_time
-                cand_attrs.recomp_cnt = sum(1 for recomped_node_attrs in self.recomp_nodes.values() if cand_node in recomped_node_attrs.recomp_srcs)
+                # cand_attrs.recomp_cnt += sum(1 for recomped_node_attrs in self.recomp_nodes.values() if cand_node in recomped_node_attrs.recomp_srcs)
     
             # case b
             if cand_node in t_attrs.recomp_srcs:
                 # different than stated in algo
-                cand_attrs.recomp_cnt += t_attrs.recomp_cnt
+                cand_attrs.recomp_cnt = t_attrs.recomp_cnt
 
             # always need to update recompute ratio, but omitted because we don't keep that info separately
 
@@ -183,8 +192,9 @@ class RecompDecision:
             self._update_candidates_after_choice(cand)
             consumed_memory -= self.recomp_nodes[cand].memory_usage
 
+            print(f"Choosing to recompute node {cand.name} with {self.recomp_nodes[cand]}", flush=True)   
+
             # if self.verbose:
-            #     print(f"Choosing to recompute node {cand.name} with {self.recomp_nodes[cand]}", flush=True)
             #     print("Updated candidate nodes: ", self.candidate_nodes, flush=True)
             #     print("Updated recompute nodes: ", self.recomp_nodes, flush=True)
 

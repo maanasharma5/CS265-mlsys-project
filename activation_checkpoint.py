@@ -101,46 +101,8 @@ def get_name_to_node_map(gm: fx.GraphModule) -> Dict[str, fx.Node]:
 
 #     return sorted_nodes
 
-# LEAF_OPS = {"placeholder", "get_attr"}
 
-# def close_frontier(joint_graph: fx.Graph,
-#                    outputs: List[fx.Node],
-#                    inputs: Set[fx.Node],
-#                    retain: Set[fx.Node]) -> List[fx.Node]:
-#     """
-#     Expands `inputs` in-place so that every tensor ancestor of `outputs`
-#     is covered by   inputs ∪ retain ∪ LEAF_OPS.
-#     Returns the final (deduplicated) input list.
-#     """
-#     stack = list(outputs)
-#     seen  = set(stack)
-
-#     while stack:
-#         n = stack.pop()
-#         for inp in n.all_input_nodes:
-#             if inp in seen:
-#                 continue
-#             seen.add(inp)
-
-#             if (inp.op in LEAF_OPS) or (inp in retain):
-#                 inputs.add(inp)
-#             else:
-#                 # internal op – keep digging
-#                 stack.append(inp)
-
-#     # functorch wants a *list* whose order matches joint_graph.nodes
-#     ordered_inputs = [n for n in joint_graph.nodes if n in inputs]
-#     return ordered_inputs
-
-# def _assert_frontier_complete(node, frontier):
-#     for inp in node.all_input_nodes:
-#         if inp not in frontier:
-#             assert inp.op not in {"placeholder", "get_attr"} and inp not in frontier,\
-#                 f"{node.name}: tensor input {inp.name} missing from frontier"
-
-
-
-def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], recomp_decision: RecompDecision, num_to_do: int, verbose: bool = False) -> fx.GraphModule:
+def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], recomp_decision: RecompDecision, verbose: bool = False) -> fx.GraphModule:
     # NOTE: You need to create the function for your project and call it inside
     # the graph_transformation function after performing graph profiling.
 
