@@ -200,13 +200,12 @@ class GraphProfiler(fx.Interpreter):
             self.all_nodes_info[output_node].node_type = NodeType.GRAD
 
         if self.verbose:
-            # print out everything needed
-            for node in self.all_nodes_info:
-                # print(f"Node: ", node.name, self.all_nodes_info[node], flush=True)
-                if self.all_nodes_info[node].node_type == NodeType.ACT:
-                    print(f"Activation node: ", node.name, self.all_nodes_info[node], flush=True)
-                if self.all_nodes_info[node].node_type == NodeType.OTHER:
-                    print(f"Other node: ", node.name, self.all_nodes_info[node], flush=True)
+            act_nodes = [node for node in self.all_nodes_info if self.all_nodes_info[node].node_type == NodeType.ACT]
+            other_nodes = [node for node in self.all_nodes_info if self.all_nodes_info[node].node_type == NodeType.OTHER]
+            for node in act_nodes:
+                print(f"Activation node: ", node.name, self.all_nodes_info[node], flush=True)
+            for node in other_nodes:
+                print(f"Other node: ", node.name, self.all_nodes_info[node], flush=True)
 
     def _initial_categorize_node(self, node: fx.Node) -> NodeType:
         if node.op == 'placeholder':
@@ -216,18 +215,26 @@ class GraphProfiler(fx.Interpreter):
         node_name = node.name.lower()
         guaranteed_activation_names = []
         other_feature_map_names = ['relu', 'gelu', 'sigm', 'tanh', 'softmax','conv', 'pool', 'aten', 'mm', 'fc', 'lin', 'batchnorm', 'dropout', 'mul', 'sub', 'add', 'view', 'getitem', 'transpos']
-        # TODO look through printouts more carefully to ensure this is the best (are there some other rules?)
-        if any(guaranteed_activation_name in node_name for guaranteed_activation_name in guaranteed_activation_names):
+        # TODO changing sometimes for debugging
+        # if any(guaranteed_activation_name in node_name for guaranteed_activation_name in guaranteed_activation_names):
+        #     return NodeType.ACT
+        # elif any(feature_map_name in node_name for feature_map_name in other_feature_map_names):
+        #     # this might be a feature map but we must also determine if it has appropriate 'use cases' in the graph
+        #     # either must be created in forward pass and used in backward pass, or an in-place operation
+        #     if (self.all_nodes_info[node].gtype_is_forward) and ((self.all_nodes_info[node].last_fw_access is None and self.all_nodes_info[node].first_bw_access is None) or (self.all_nodes_info[node].first_bw_access is not None)):
+        #         return NodeType.ACT
+        #     else:
+        #         if self.verbose:
+        #             print("False positive for activation node", node.name, self.all_nodes_info[node], flush=True)
+        #         return NodeType.OTHER
+        if (
+            self.all_nodes_info[node].gtype_is_forward and 
+            (
+                (self.all_nodes_info[node].last_fw_access is not None and self.all_nodes_info[node].first_bw_access is not None)
+                # or (node.op not in [OP.PLACEHOLDER, OP.OUTPUT] and self.all_nodes_info[node].last_fw_access is None and self.all_nodes_info[node].first_bw_access is not None)
+            )
+        ):
             return NodeType.ACT
-        elif any(feature_map_name in node_name for feature_map_name in other_feature_map_names):
-            # this might be a feature map but we must also determine if it has appropriate 'use cases' in the graph
-            # either must be created in forward pass and used in backward pass, or an in-place operation
-            if (self.all_nodes_info[node].gtype_is_forward) and ((self.all_nodes_info[node].last_fw_access is None and self.all_nodes_info[node].first_bw_access is None) or (self.all_nodes_info[node].first_bw_access is not None)):
-                return NodeType.ACT
-            else:
-                if self.verbose:
-                    print("False positive for activation node", node.name, self.all_nodes_info[node], flush=True)
-                return NodeType.OTHER
         elif 'tag_grad' in node_name:
             return NodeType.GRAD
         else:

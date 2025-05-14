@@ -78,9 +78,9 @@ class RecompDecision:
 
         srcs: Set[fx.Node] = set()
         for src in node.all_input_nodes:
-            if src.op in [OP.PLACEHOLDER]:
+            if self.profile_node_info[src].node_type == NodeType.PARAM:
+                # if src is a parameter, we don't need to recompute it
                 srcs.add(src)
-            # if src is a parameter, we don't need to recompute it
             if src in self.candidate_nodes.keys():
                 srcs.add(src)
             else:
@@ -183,8 +183,10 @@ class RecompDecision:
             self._update_candidates_after_choice(cand)
             consumed_memory -= self.recomp_nodes[cand].memory_usage
 
-            if self.verbose:
-                print(f"Choosing to recompute node {cand.name}", flush=True)
+            # if self.verbose:
+            #     print(f"Choosing to recompute node {cand.name} with {self.recomp_nodes[cand]}", flush=True)
+            #     print("Updated candidate nodes: ", self.candidate_nodes, flush=True)
+            #     print("Updated recompute nodes: ", self.recomp_nodes, flush=True)
 
 
                 
