@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple, Set
 from graph_prof import GraphProfiler, NodeAttributes, NodeType, OP
 from dataclasses import dataclass, field, asdict
 from time import time
+import random
 
 # Recomputation Decision without Swapping-optimized Scheduling -- as described in https://www.youtube.com/watch?v=GBzar0GQrJo
 # Largely from Appendix A.4 of MuTWO paper
@@ -80,6 +81,9 @@ class RecompDecision:
 
         orig_peak_mem = graph_profiler.memory_stats.peak_memory_usage
         self._determine_recomp_nodes(orig_peak_mem, orig_peak_mem * self.recomp_mem_usage_ratio)
+
+        # sort by self.profile_node_info[node].rank
+        #  self.recomp_nodes = {k: v for k, v in sorted(self.recomp_nodes.items(), key=lambda item: self.profile_node_info[item[0]].rank)}
 
 
     def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
