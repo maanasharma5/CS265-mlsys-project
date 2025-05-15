@@ -102,7 +102,7 @@ def get_name_to_node_map(gm: fx.GraphModule) -> Dict[str, fx.Node]:
 #     return sorted_nodes
 
 
-def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], recomp_decision: RecompDecision, verbose: bool = False) -> fx.GraphModule:
+def activation_checkpointing(gm: fx.GraphModule, recomp_decision: RecompDecision, verbose: bool = False) -> fx.GraphModule:
     # NOTE: You need to create the function for your project and call it inside
     # the graph_transformation function after performing graph profiling.
 
@@ -121,7 +121,7 @@ def activation_checkpointing(gm: fx.GraphModule, profile_node_info: Dict[fx.Node
 
         # Insert the nodes of the new sub-graph in the old graph before the first
         # backward access of the node to be recomputed.
-        with gm.graph.inserting_before(profile_node_info[rp].first_bw_access):
+        with gm.graph.inserting_before(recomp_decision.profile_node_info[rp].first_bw_access):
             for n in recompute_subgraph.nodes:
                 if n.op == "placeholder" or n.op == "output":
                     continue
@@ -178,15 +178,6 @@ if __name__ == "__main__":
     #     graph_profiler.aggregate_stats()
     # TODO this does not work we have some placeholder error in the profiler
 
-    # Calculate recomp decision
-    peak_mem = graph_profiler.memory_stats.peak_memory_usage
-    recomp = RecompDecision(graph_module, graph_profiler.all_nodes_info)
-    recomp.determine_recomp_nodes(peak_mem, 0.9*peak_mem)
-
-    # Apply the activation checkpointing algorithm (check new node 'relu_2')
-    new_graph_module = activation_checkpointing(graph_module, graph_profiler.all_nodes_info, recomp)
-    print("Modified graph of custom fn (fwd+bwd+activation_checkpointing): ")
-    new_graph_module.graph.print_tabular()
 
     # Obtain the gradients of (w1, w2) using x as input to the activation
     # checkpointed function to recalculate them

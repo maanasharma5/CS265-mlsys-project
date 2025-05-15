@@ -41,15 +41,16 @@ class RecompAttributes:
 
 
 class RecompDecision:
-    def __init__(self, gm: fx.GraphModule, profile_node_info: Dict[fx.Node, NodeAttributes], verbose: bool = False) -> None:
+    def __init__(self, gm: fx.GraphModule, graph_profiler: GraphProfiler, recomp_mem_usage_ratio: float, verbose: bool = False) -> None:
         self.verbose = verbose
+        self.profile_node_info = graph_profiler.all_nodes_info
         if self.verbose:
             print("Initializing RecompDecision", flush=True)
             print("profile_node_info", flush=True)
-            for node, attrs in profile_node_info.items():
+            for node, attrs in self.profile_node_info.items():
                 print(f"Node {node.name}: {attrs}", flush=True)
         self.gm = gm
-        self.profile_node_info = profile_node_info
+        self.recomp_mem_usage_ratio = recomp_mem_usage_ratio
 
         self._src_cache: Dict[fx.Node, Set[fx.Node]] = {}
 
@@ -76,6 +77,10 @@ class RecompDecision:
         #     print(f"Finished initializing RecompDecision with {len(self.candidate_nodes)} candidate nodes", flush=True)
         #     for node, attrs in self.candidate_nodes.items():
         #         print(f"Node {node.name}: {attrs}", flush=True)
+
+        orig_peak_mem = graph_profiler.memory_stats.peak_memory_usage
+        self._determine_recomp_nodes(orig_peak_mem, orig_peak_mem * self.recomp_mem_usage_ratio)
+
 
     def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
         if node in self._src_cache:
@@ -116,7 +121,7 @@ class RecompDecision:
     def _update_recomps_after_choice(self, cand: fx.Node) -> int:
         # NOTE assumes that cand information is still in candidate_nodes
         # Algorithm E
-        cand_recomp_cnt = self.candidate_nodes[cand].recomp_cnt
+        cand_recomp_cnt = max(1, self.candidate_nodes[cand].recomp_cnt)
         for recomped_node, recomped_node_attrs in self.recomp_nodes.items():
             cand_node_attrs = self.candidate_nodes[cand]
             if cand in recomped_node_attrs.recomp_srcs:
@@ -148,10 +153,14 @@ class RecompDecision:
 
             # always need to update recompute ratio, but omitted because we don't keep that info separately
 
-    def determine_recomp_nodes(self, consumed_memory: int, max_memory_capacity: int) -> None:
+    def _determine_recomp_nodes(self, consumed_memory: int, max_memory_capacity: int) -> None:
         # Updates internal state of RecompDecision object so we should not call this method with contradictory arguments
         # probably should have chosen a different abstraction to this process than a class
         # get all the information from self.recomp_nodes
+
+        original_consumed_memory = consumed_memory
+
+        print(f"Determining recompute nodes with ratio approx. {max_memory_capacity / consumed_memory}", flush=True)
 
         while (len(self.candidate_nodes) > 0 and consumed_memory > max_memory_capacity):
             # Algorithm D
@@ -170,7 +179,7 @@ class RecompDecision:
             self._update_candidates_after_choice(cand)
             consumed_memory -= self.recomp_nodes[cand].memory_usage
 
-            print(f"Choosing to recompute node {cand.name} with {self.recomp_nodes[cand]}", flush=True)   
+            print(f"Now at {consumed_memory / original_consumed_memory * 100:.2f}% of memory\n after chose to recompute node {cand.name} with {self.recomp_nodes[cand]}", flush=True)   
 
             # if self.verbose:
             #     print("Updated candidate nodes: ", self.candidate_nodes, flush=True)

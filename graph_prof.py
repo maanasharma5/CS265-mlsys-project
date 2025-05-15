@@ -370,13 +370,15 @@ class GraphProfiler(fx.Interpreter):
         self.memory_stats = MemoryStatistics()
         self.in_forward_pass = True
 
-    def dump_stats(self, path: str = None) -> None:
+    def dump_stats(self, time_to_determine_recomputation = 0, time_to_edit_graph = 0, path: str = None) -> None:
         if path is None:
             path = 'results/default_graph_profiler_stats.json'
         with open(path, 'w') as f:
             dict_to_dump = asdict(self.memory_stats)
             dict_to_dump['rank_of_backward'] = self.rank_of_backward
             dict_to_dump['avg_time_per_run'] = self.all_aggregated_stats.time_per_run
+            dict_to_dump['time_to_determine_recomputation'] = time_to_determine_recomputation
+            dict_to_dump['time_to_edit_graph'] = time_to_edit_graph
             json.dump(dict_to_dump, f)
         print(f"Dumped graph profiler stats to {path}", flush=True)
         

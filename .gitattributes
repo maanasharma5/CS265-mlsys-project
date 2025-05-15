@@ -1,3 +1,4 @@
 figures.ipynb filter=lfs diff=lfs merge=lfs -text
 results/* filter=lfs diff=lfs merge=lfs -text
 figures[[:space:]]copy.ipynb filter=lfs diff=lfs merge=lfs -text
+figures[[:space:]]copy[[:space:]]2.ipynb filter=lfs diff=lfs merge=lfs -text

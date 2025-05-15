@@ -15,6 +15,7 @@ from graph_prof import GraphProfiler
 from graph_tracer import SEPFunction, compile
 from recomp import RecompDecision, RecompAttributes
 from activation_checkpoint import activation_checkpointing
+import time
 
 
 model_names: List[str] = [
@@ -31,13 +32,13 @@ model_batch_sizes: Dict[str, int] = {
 
 
 class Experiment:
-    def __init__(self, model_name: str, batch_size: int, to_recompute: bool, experiment_suffix = "", verbose=False, extra_args=[]):
+    def __init__(self, model_name: str, batch_size: int, recomp_mem_usage_ratio=None, experiment_suffix = "", verbose=False, extra_args=[]):
         assert model_name in model_names, f"Model {model_name} not found in model names {model_names}"
         dev = torch.device("cuda")
         self.model_name = model_name
         self.batch_size = batch_size
         self.verbose = verbose
-        self.to_recompute = to_recompute
+        self.recomp_mem_usage_ratio = recomp_mem_usage_ratio
         self.experiment_suffix = experiment_suffix
 
         if self.model_name == "Transformer":
@@ -107,7 +108,6 @@ class Experiment:
         graph_profiler = GraphProfiler(gm, verbose=self.verbose) # TODO add some args in here
 
         dump_name = f"results/{self.model_name}_batch{self.batch_size}_graph_profiler_stats{self.experiment_suffix}.json"
-        recomputed_dump_name = f"results/{self.model_name}_batch{self.batch_size}_recomputed_graph_profiler_stats{self.experiment_suffix}.json"
 
         with torch.no_grad():
             for _ in range(warm_up_iters):
@@ -121,18 +121,25 @@ class Experiment:
                 graph_profiler.print_stats()
             graph_profiler.dump_stats(dump_name)
 
+        to_recompute = (self.recomp_mem_usage_ratio is not None)
+        if to_recompute:
 
-        if self.to_recompute:
-            peak_mem = graph_profiler.memory_stats.peak_memory_usage
-            max_mem = int(peak_mem/2)
-            recomputer = RecompDecision(gm, graph_profiler.all_nodes_info, verbose=self.verbose)
-            recomputer.determine_recomp_nodes(peak_mem, max_mem)
+            recomputed_dump_name = f"results/{self.model_name}_batch{self.batch_size}_recomputed_{self.recomp_mem_usage_ratio}_graph_profiler_stats{self.experiment_suffix}.json"
 
-            rgm = activation_checkpointing(gm, graph_profiler.all_nodes_info, recomputer, verbose=self.verbose)
+            recomp_start = time.time()
+            recomputer = RecompDecision(gm, graph_profiler, self.recomp_mem_usage_ratio, verbose=self.verbose)
+            recomp_end = time.time()
+            recomp_time = recomp_end - recomp_start
+
+            rewrite_start = time.time()
+            rgm = activation_checkpointing(gm, recomputer, verbose=self.verbose)
+            rewrite_end = time.time()
+            rewrite_time = rewrite_end - rewrite_start
             
 
             print("Profiling recomputed graph", flush=True)
             recomputed_graph_profiler = GraphProfiler(rgm)
+
             with torch.no_grad():
                 for _ in range(warm_up_iters):
                     recomputed_graph_profiler.run(*args)
@@ -143,9 +150,9 @@ class Experiment:
                 recomputed_graph_profiler.aggregate_stats()
                 if self.verbose:
                     recomputed_graph_profiler.print_stats()
-                recomputed_graph_profiler.dump_stats(recomputed_dump_name)
+                recomputed_graph_profiler.dump_stats(time_to_determine_recomputation=recomp_time, time_to_edit_graph=rewrite_time, path=recomputed_dump_name)
 
-        return rgm if self.to_recompute else gm
+        return rgm if to_recompute else gm
 
     def run(self):
         self.train_step(self.model, self.optimizer, self.example_inputs)
