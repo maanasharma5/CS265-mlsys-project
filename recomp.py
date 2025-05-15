@@ -94,26 +94,6 @@ class RecompDecision:
         self._src_cache[node] = srcs
         return srcs
 
-    # def _find_srcs(self, node: fx.Node) -> Set[fx.Node]:
-    #     """
-    #     DFS with memoisation.  `retain` = activations we already agreed to keep.
-    #     """
-
-    #     LEAF_OPS = {"placeholder", "get_attr"}
-
-    #     if node in self._src_cache:
-    #         return self._src_cache[node]
-
-    #     frontier: Set[fx.Node] = set()
-    #     for inp in node.all_input_nodes:
-    #         if (inp.op in LEAF_OPS) or (inp in self.candidate_nodes.keys()):     # the *only* stopping rule
-    #             frontier.add(inp)
-    #         else:
-    #             frontier.update(self._find_srcs(inp))
-
-    #     self._src_cache[node] = frontier
-    #     return frontier
-
     def _calculate_recomp_ratio(self, node: fx.Node) -> float:
         # Algorithm C
         # NOTE assumes that node is in candidate_nodes
@@ -143,12 +123,12 @@ class RecompDecision:
                 recomped_node_attrs.recomp_srcs.remove(cand)
                 recomped_node_attrs.recomp_srcs.update(cand_node_attrs.recomp_srcs)
                 recomped_node_attrs.recomp_time += cand_node_attrs.recomp_time
-                cand_recomp_cnt += 1
+                cand_recomp_cnt += recomped_node_attrs.recomp_cnt # originally += 1 but we update this here instead of line 143
         return cand_recomp_cnt
 
     def _update_candidates_after_choice(self, t: fx.Node) -> None:
         # Algorithm F
-        # slightly different than stated because i am not maintaing total_recomp_time separately
+        # slightly different than stated because i am not maintaing total_recomp_time separately -- maintained in recomp_time and recomp_cnt
 
         # NOTE assumes that t is in recomp_nodes already -- if not we need to change line 110 as well
 
@@ -159,13 +139,11 @@ class RecompDecision:
             if t in cand_attrs.recomp_srcs:
                 cand_attrs.recomp_srcs.remove(t)
                 cand_attrs.recomp_srcs.update(t_attrs.recomp_srcs)
-                # accumulate cand_recomp_time (different than stated algo)
                 cand_attrs.recomp_time += t_attrs.recomp_time
-                # cand_attrs.recomp_cnt += sum(1 for recomped_node_attrs in self.recomp_nodes.values() if cand_node in recomped_node_attrs.recomp_srcs)
+                # omitted - doing in line 126 - cand_attrs.recomp_cnt += sum(1 for recomped_node_attrs in self.recomp_nodes.values() if cand_node in recomped_node_attrs.recomp_srcs)
     
             # case b
             if cand_node in t_attrs.recomp_srcs:
-                # different than stated in algo
                 cand_attrs.recomp_cnt = t_attrs.recomp_cnt
 
             # always need to update recompute ratio, but omitted because we don't keep that info separately
