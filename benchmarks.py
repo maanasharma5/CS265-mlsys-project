@@ -119,7 +119,7 @@ class Experiment:
             graph_profiler.aggregate_stats()
             if self.verbose:
                 graph_profiler.print_stats()
-            graph_profiler.dump_stats(dump_name)
+            graph_profiler.dump_stats(path=dump_name)
 
         to_recompute = (self.recomp_mem_usage_ratio is not None)
         if to_recompute:
